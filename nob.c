@@ -1,3 +1,4 @@
+#include <string.h>
 #define NOB_STRIP_PREFIX
 #define NOB_IMPLEMENTATION
 #include "nob.h"
@@ -47,6 +48,12 @@ bool run_test(String_View test_name) {
   if (should_fail) {
     return false;
   }
+
+  if (expected.count != output.count) {
+    return false;
+  }
+  if (strncmp(output.items, expected.items, output.count) != 0)
+    return false;
 
   return true;
 }
