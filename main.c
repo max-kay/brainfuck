@@ -142,7 +142,7 @@ typedef struct {
   Operation *items;
   size_t count;
   size_t capacity;
-} Code;
+} Intermediate;
 
 void *get_jit_region(size_t len) {
   void *ptr = mmap(NULL, len, PROT_WRITE | PROT_EXEC,
@@ -161,7 +161,7 @@ typedef struct {
   size_t capacity;
 } JumpForwardIndecies;
 
-int parse_bf(String_View iter, Code *code) {
+int parse_bf(String_View iter, Intermediate *ir) {
   JumpForwardIndecies idxs = {0};
 
   Token prev_token = TOK_START;
@@ -170,9 +170,9 @@ int parse_bf(String_View iter, Code *code) {
     Operation current_op = {0};
     switch (token) {
     case TOK_JUMP_FOREWARD:
-      da_append(&idxs, code->count);
+      da_append(&idxs, ir->count);
       current_op = (Operation){.op = OP_JUMP_FOREWARD, .rep_or_jump_idx = 0};
-      da_append(code, current_op);
+      da_append(ir, current_op);
       break;
 
     case TOK_JUMP_BACKWARD:
@@ -181,10 +181,10 @@ int parse_bf(String_View iter, Code *code) {
         goto error;
       }
       size_t last_idx = da_pop(&idxs);
-      code->items[last_idx].rep_or_jump_idx = code->count;
+      ir->items[last_idx].rep_or_jump_idx = ir->count;
       current_op =
           (Operation){.op = OP_JUMP_BACKWARD, .rep_or_jump_idx = last_idx};
-      da_append(code, current_op);
+      da_append(ir, current_op);
       break;
 
     case TOK_START:
@@ -196,11 +196,11 @@ int parse_bf(String_View iter, Code *code) {
 
     default:
       if (token == prev_token) {
-        code->items[code->count - 1].rep_or_jump_idx += 1;
+        ir->items[ir->count - 1].rep_or_jump_idx += 1;
       } else {
         current_op =
             (Operation){.op = token_as_op_code(token), .rep_or_jump_idx = 1};
-        da_append(code, current_op);
+        da_append(ir, current_op);
       }
     }
     prev_token = token;
@@ -215,7 +215,7 @@ finish:
   return 0;
 
 error:
-  *code = (Code){0};
+  *ir = (Intermediate){0};
   da_free(idxs);
   return -1;
 }
@@ -242,12 +242,12 @@ void tape_write(Tape *tape, size_t idx, uint8_t val) {
   tape->items[idx] = val;
 }
 
-int interpret(Code *code) {
+int ir_interpret(Intermediate *ir) {
   size_t instruction_ptr = 0;
   size_t tape_ptr = 0;
   Tape tape = {0};
-  while (instruction_ptr < code->count) {
-    Operation op = code->items[instruction_ptr];
+  while (instruction_ptr < ir->count) {
+    Operation op = ir->items[instruction_ptr];
     uint8_t tape_val = tape_read(&tape, tape_ptr);
 
 #ifdef DEBUG
@@ -309,9 +309,9 @@ int interpret(Code *code) {
   return 0;
 }
 
-void print_ir(Code *code) {
-  for (size_t i = 0; i < code->count; i++) {
-    Operation op = code->items[i];
+void print_ir(Intermediate *ir) {
+  for (size_t i = 0; i < ir->count; i++) {
+    Operation op = ir->items[i];
     printf("%0*zu: %s %*zu\n", 3, i, op_as_str(op.op), 4, op.rep_or_jump_idx);
   }
 }
@@ -320,26 +320,20 @@ int main(int argc, char **argv) {
   char *p_name = *argv;
   shift(argv, argc);
 
-  if (argc == 0) {
+  if (argc == 0 | argc > 1) {
     printf("Usage %s <filename.bf>\n", p_name);
-    printf("No input files were provided\n");
     exit(-1);
   }
 
   String_Builder contents = {0};
   read_entire_file(*argv, &contents);
-  sb_append_null(&contents);
-  printf("contents: %s\n", contents.items);
-  String_View iter = sb_to_sv(contents);
 
-  Code code = {0};
+  Intermediate ir = {0};
 
-  if (parse_bf(iter, &code) != 0)
+  if (parse_bf(sb_to_sv(contents), &ir) != 0)
     exit(-1);
 
-  print_ir(&code);
-
-  interpret(&code);
+  ir_interpret(&ir);
 
   return 0;
 }
