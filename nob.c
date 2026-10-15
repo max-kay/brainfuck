@@ -83,7 +83,8 @@ int main(int argc, char **argv) {
     shift(argv, argc);
   }
 
-  cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Werror", "-o", "main", "main.c");
+  cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Werror", "-o", "main", "-O3",
+             "main.c");
   if (!cmd_run(&CMD))
     return 1;
 
