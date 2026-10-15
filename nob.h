@@ -1807,7 +1807,7 @@ NOBDEF bool nob_proc_wait(Nob_Proc proc)
     }
 
     if (exit_status != 0) {
-        nob_log(NOB_ERROR, "command exited with exit code %lu", exit_status);
+        // nob_log(NOB_ERROR, "command exited with exit code %lu", exit_status);
         return false;
     }
 
@@ -1825,7 +1825,7 @@ NOBDEF bool nob_proc_wait(Nob_Proc proc)
         if (WIFEXITED(wstatus)) {
             int exit_status = WEXITSTATUS(wstatus);
             if (exit_status != 0) {
-                nob_log(NOB_ERROR, "command exited with exit code %d", exit_status);
+                // nob_log(NOB_ERROR, "command exited with exit code %d", exit_status);
                 return false;
             }
 
