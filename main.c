@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -8,6 +9,8 @@
 #define NOB_STRIP_PREFIX
 #define NOB_IMPLEMENTATION
 #include "nob.h"
+
+// #define DEBUG
 
 typedef enum {
   TOK_MOVE_LEFT,
@@ -185,7 +188,7 @@ int parse_bf(String_View iter, Code *code) {
       break;
 
     case TOK_START:
-      UNREACHABLE("TOK_START is never return by get_next");
+      UNREACHABLE("TOK_START is never returned by get_next");
       break;
     case TOK_END:
       goto finish;
@@ -217,6 +220,102 @@ error:
   return -1;
 }
 
+typedef struct {
+  uint8_t *items;
+  size_t count;
+  size_t capacity;
+} Tape;
+
+uint8_t tape_read(Tape *tape, size_t idx) {
+  if (idx < tape->count) {
+    return tape->items[idx];
+  } else {
+    return 0;
+  }
+}
+
+void tape_write(Tape *tape, size_t idx, uint8_t val) {
+  if (idx >= tape->count) {
+    while (tape->count <= idx)
+      da_append(tape, 0);
+  }
+  tape->items[idx] = val;
+}
+
+int interpret(Code *code) {
+  size_t instruction_ptr = 0;
+  size_t tape_ptr = 0;
+  Tape tape = {0};
+  while (instruction_ptr < code->count) {
+    Operation op = code->items[instruction_ptr];
+    uint8_t tape_val = tape_read(&tape, tape_ptr);
+
+#ifdef DEBUG
+    fprintf(stderr, "instruction_ptr: %zu\n", instruction_ptr);
+    fprintf(stderr, "tape[%zu] = %d\n", tape_ptr, tape_val);
+    fprintf(stderr, "instruction: Operation { op = %s, rep_or_jump = %zu }\n\n",
+            op_as_str(op.op), op.rep_or_jump_idx);
+#endif // DEBUG
+
+    switch (op.op) {
+    case OP_INC:
+      tape_val += op.rep_or_jump_idx;
+      tape_write(&tape, tape_ptr, tape_val);
+      instruction_ptr++;
+      break;
+    case OP_DEC:
+      tape_val -= op.rep_or_jump_idx;
+      tape_write(&tape, tape_ptr, tape_val);
+      instruction_ptr++;
+      break;
+
+    case OP_MOVE_RIGHT:
+      tape_ptr += op.rep_or_jump_idx;
+      instruction_ptr++;
+      break;
+    case OP_MOVE_LEFT:
+      tape_ptr -= op.rep_or_jump_idx;
+      instruction_ptr++;
+      break;
+
+    case OP_INPUT:
+      TODO("input");
+      instruction_ptr++;
+      break;
+    case OP_OUTPUT:
+      for (size_t i = 0; i < op.rep_or_jump_idx; i++)
+        printf("%c", tape_val);
+      instruction_ptr++;
+      break;
+
+    case OP_JUMP_FOREWARD:
+      if (tape_val == 0) {
+        instruction_ptr = op.rep_or_jump_idx + 1;
+      } else {
+        instruction_ptr++;
+      }
+      break;
+    case OP_JUMP_BACKWARD:
+      if (tape_val != 0) {
+        instruction_ptr = op.rep_or_jump_idx + 1;
+      } else {
+        instruction_ptr++;
+      }
+      break;
+    }
+  }
+
+  da_free(tape);
+  return 0;
+}
+
+void print_ir(Code *code) {
+  for (size_t i = 0; i < code->count; i++) {
+    Operation op = code->items[i];
+    printf("%0*zu: %s %*zu\n", 3, i, op_as_str(op.op), 4, op.rep_or_jump_idx);
+  }
+}
+
 int main(int argc, char **argv) {
   char *p_name = *argv;
   shift(argv, argc);
@@ -235,12 +334,12 @@ int main(int argc, char **argv) {
 
   Code code = {0};
 
-  parse_bf(iter, &code);
+  if (parse_bf(iter, &code) != 0)
+    exit(-1);
 
-  for (size_t i = 0; i < code.count; i++) {
-    Operation op = code.items[i];
-    printf("%0*zu: %s %*zu\n", 3, i, op_as_str(op.op), 4, op.rep_or_jump_idx);
-  }
+  print_ir(&code);
+
+  interpret(&code);
 
   return 0;
 }
