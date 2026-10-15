@@ -36,7 +36,7 @@ bool run_test(String_View test_name) {
              temp_sprintf("%s/" SV_Fmt ".bf", TEST_PATH, SV_Arg(test_name)));
 
   const char *stdout_path =
-      temp_sprintf("%s/" SV_Fmt ".stdout", TEST_PATH, SV_Arg(test_name));
+      temp_sprintf("/tmp/bf_test_" SV_Fmt ".stdout", SV_Arg(test_name));
   bool cmd_failed;
   if (has_input) {
     cmd_failed =
