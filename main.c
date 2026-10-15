@@ -5,12 +5,25 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/types.h>
+#include <termios.h>
 
 #define NOB_STRIP_PREFIX
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
 // #define DEBUG
+
+static struct termios orig_termios;
+
+void init_terminal(void) {
+  struct termios raw;
+  tcgetattr(STDIN_FILENO, &orig_termios);
+  raw = orig_termios;
+  raw.c_lflag &= ~(ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+}
+
+void reset_terminal(void) { tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios); }
 
 typedef enum {
   TOK_MOVE_LEFT,
@@ -196,7 +209,7 @@ int parse_bf(String_View iter, Intermediate *ir) {
 
     default:
       if (token == prev_token) {
-        ir->items[ir->count - 1].rep_or_jump_idx += 1;
+        da_last(ir).rep_or_jump_idx += 1;
       } else {
         current_op =
             (Operation){.op = token_as_op_code(token), .rep_or_jump_idx = 1};
@@ -243,6 +256,8 @@ void tape_write(Tape *tape, size_t idx, uint8_t val) {
 }
 
 int ir_interpret(Intermediate *ir) {
+  init_terminal();
+
   size_t instruction_ptr = 0;
   size_t tape_ptr = 0;
   Tape tape = {0};
@@ -253,7 +268,8 @@ int ir_interpret(Intermediate *ir) {
 #ifdef DEBUG
     fprintf(stderr, "instruction_ptr: %zu\n", instruction_ptr);
     fprintf(stderr, "tape[%zu] = %d\n", tape_ptr, tape_val);
-    fprintf(stderr, "instruction: Operation { op = %s, rep_or_jump = %zu }\n\n",
+    fprintf(stderr,
+            "instruction: Operation { op = `%s`, rep_or_jump = %zu }\n\n",
             op_as_str(op.op), op.rep_or_jump_idx);
 #endif // DEBUG
 
@@ -279,7 +295,8 @@ int ir_interpret(Intermediate *ir) {
       break;
 
     case OP_INPUT:
-      TODO("input");
+      for (size_t i = 0; i < op.rep_or_jump_idx; i++)
+        tape_write(&tape, tape_ptr, getchar());
       instruction_ptr++;
       break;
     case OP_OUTPUT:
@@ -306,6 +323,7 @@ int ir_interpret(Intermediate *ir) {
   }
 
   da_free(tape);
+  reset_terminal();
   return 0;
 }
 
@@ -322,7 +340,7 @@ int main(int argc, char **argv) {
 
   if (argc == 0 | argc > 1) {
     printf("Usage %s <filename.bf>\n", p_name);
-    exit(-1);
+    goto error;
   }
 
   String_Builder contents = {0};
@@ -331,9 +349,12 @@ int main(int argc, char **argv) {
   Intermediate ir = {0};
 
   if (parse_bf(sb_to_sv(contents), &ir) != 0)
-    exit(-1);
+    goto error;
 
   ir_interpret(&ir);
 
   return 0;
+
+error:
+  return -1;
 }
