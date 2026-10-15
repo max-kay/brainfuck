@@ -174,7 +174,7 @@ typedef struct {
   size_t capacity;
 } JumpForwardIndecies;
 
-int parse_bf(String_View iter, Intermediate *ir) {
+bool parse_bf(String_View iter, Intermediate *ir) {
   JumpForwardIndecies idxs = {0};
 
   Token prev_token = TOK_START;
@@ -225,12 +225,12 @@ finish:
     goto error;
   }
   da_free(idxs);
-  return 0;
+  return true;
 
 error:
   *ir = (Intermediate){0};
   da_free(idxs);
-  return -1;
+  return false;
 }
 
 typedef struct {
@@ -255,7 +255,7 @@ void tape_write(Tape *tape, size_t idx, uint8_t val) {
   tape->items[idx] = val;
 }
 
-int ir_interpret(Intermediate *ir) {
+void ir_interpret(Intermediate *ir) {
   init_terminal();
 
   size_t instruction_ptr = 0;
@@ -324,7 +324,7 @@ int ir_interpret(Intermediate *ir) {
 
   da_free(tape);
   reset_terminal();
-  return 0;
+  return;
 }
 
 void print_ir(Intermediate *ir) {
@@ -348,7 +348,7 @@ int main(int argc, char **argv) {
 
   Intermediate ir = {0};
 
-  if (parse_bf(sb_to_sv(contents), &ir) != 0)
+  if (!parse_bf(sb_to_sv(contents), &ir))
     goto error;
 
   ir_interpret(&ir);
