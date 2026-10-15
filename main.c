@@ -228,7 +228,7 @@ finish:
   return true;
 
 error:
-  *ir = (Intermediate){0};
+  ir->count = 0;
   da_free(idxs);
   return false;
 }
@@ -249,13 +249,14 @@ uint8_t tape_read(Tape *tape, size_t idx) {
 
 void tape_write(Tape *tape, size_t idx, uint8_t val) {
   if (idx >= tape->count) {
-    while (tape->count <= idx)
-      da_append(tape, 0);
+    size_t old_count = tape->count;
+    da_resize(tape, idx + 1);
+    memset(&tape->items[old_count], 0, idx + 1 - old_count);
   }
   tape->items[idx] = val;
 }
 
-void ir_interpret(Intermediate *ir) {
+bool ir_interpret(Intermediate *ir) {
   init_terminal();
 
   size_t instruction_ptr = 0;
@@ -290,6 +291,9 @@ void ir_interpret(Intermediate *ir) {
       instruction_ptr++;
       break;
     case OP_MOVE_LEFT:
+      if (op.rep_or_jump_idx > tape_ptr) {
+        goto error;
+      }
       tape_ptr -= op.rep_or_jump_idx;
       instruction_ptr++;
       break;
@@ -301,7 +305,7 @@ void ir_interpret(Intermediate *ir) {
       break;
     case OP_OUTPUT:
       for (size_t i = 0; i < op.rep_or_jump_idx; i++)
-        printf("%c", tape_val);
+        putchar(tape_val);
       instruction_ptr++;
       break;
 
@@ -324,7 +328,11 @@ void ir_interpret(Intermediate *ir) {
 
   da_free(tape);
   reset_terminal();
-  return;
+  return true;
+error:
+  da_free(tape);
+  reset_terminal();
+  return false;
 }
 
 void print_ir(Intermediate *ir) {
@@ -340,21 +348,24 @@ int main(int argc, char **argv) {
 
   if (argc == 0 | argc > 1) {
     printf("Usage %s <filename.bf>\n", p_name);
-    goto error;
+    return -1;
   }
 
   String_Builder contents = {0};
-  read_entire_file(*argv, &contents);
+  if (!read_entire_file(*argv, &contents)) {
+    fprintf(stderr, "could not find file %s\n", *argv);
+    return -1;
+  }
 
   Intermediate ir = {0};
 
   if (!parse_bf(sb_to_sv(contents), &ir))
-    goto error;
+    return -1;
 
-  ir_interpret(&ir);
+  if (!ir_interpret(&ir)) {
+    fprintf(stderr, "Encountered underflow");
+    return -1;
+  }
 
   return 0;
-
-error:
-  return -1;
 }
