@@ -50,7 +50,7 @@ _bf_assembled:
 ```
 
 ### Postlude
-```
+```asm
   mov x0, 1
 bf_postlude:
   ldp x29, x30, [sp, 16]
