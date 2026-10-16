@@ -12,6 +12,8 @@
 #include "nob.h"
 
 // #define DEBUG
+//
+#define TAPE_LEN 1024 * 4
 
 static struct termios orig_termios;
 
@@ -77,21 +79,21 @@ typedef enum {
 char *op_as_str(OpCode t) {
   switch (t) {
   case OP_MOVE_LEFT:
-    return "<";
+    return "L";
   case OP_MOVE_RIGHT:
-    return ">";
+    return "R";
   case OP_INC:
-    return "+";
+    return "A";
   case OP_DEC:
-    return "-";
+    return "S";
   case OP_OUTPUT:
-    return ".";
+    return "O";
   case OP_INPUT:
-    return ",";
+    return "I";
   case OP_JUMP_FOREWARD:
-    return "[";
+    return "F";
   case OP_JUMP_BACKWARD:
-    return "]";
+    return "B";
   }
 }
 
@@ -342,6 +344,124 @@ void print_ir(Intermediate *ir) {
   }
 }
 
+void append_freestanding_main(String_Builder *sb) {
+  sb_appendf(sb, ".global _main\n");
+  sb_appendf(sb, ".align 2\n");
+
+  sb_appendf(sb, "_main:\n");
+
+  sb_appendf(sb, "  stp fp, lr, [sp, -16]!\n");
+  sb_appendf(sb, "  mov fp, sp\n");
+
+  sb_appendf(sb, "  mov x0, %d\n", TAPE_LEN);
+  sb_appendf(sb, "  bl _malloc\n");
+  sb_appendf(sb, "  cbz x0, exit\n");
+  sb_appendf(sb, "  bl _bf_assembled\n");
+
+  sb_appendf(sb, "exit:\n");
+  sb_appendf(sb, "  ldp fp, lr, [sp], 16\n");
+  sb_appendf(sb, "  sub x0, x0, #1\n");
+  sb_appendf(sb, "  bl _exit\n");
+}
+
+// generates the function:
+// bool brainfuck_function(void *tape_ptr)
+void translate_to_asm(String_Builder *sb, Intermediate *ir) {
+  char *tape_base = "x20";
+  char *tape_index = "x21";
+
+  // Prelude
+  sb_appendf(sb, ".globl _bf_assembled\n");
+  sb_appendf(sb, "_bf_assembled:\n");
+  sb_appendf(sb, "  sub sp, sp, 32\n");
+  sb_appendf(sb, "  stp x29, x30, [sp, 16]\n");
+  sb_appendf(sb, "  stp %s, %s, [sp]\n", tape_base, tape_index);
+  sb_appendf(sb, "  mov x29, sp\n");
+  sb_appendf(sb, "  mov %s, x0\n", tape_base);
+  sb_appendf(sb, "  mov %s, xzr\n", tape_index);
+  for (size_t i = 0; i < ir->count; i++) {
+    Operation op = ir->items[i];
+    switch (op.op) {
+    case OP_MOVE_RIGHT:
+      // sb_appendf(sb, "  brk #0xf000\n");
+      sb_appendf(sb, "  add %s, %s, %zu\n", tape_index, tape_index,
+                 op.rep_or_jump_idx);
+      sb_appendf(sb, "  cmp %s, %d\n", tape_index, TAPE_LEN);
+      sb_appendf(sb, "  b.hs bf_overflow\n");
+      break;
+    case OP_MOVE_LEFT:
+      // sb_appendf(sb, "  brk #0xf000\n");
+      sb_appendf(sb, "  subs %s, %s, %zu\n", tape_index, tape_index,
+                 op.rep_or_jump_idx);
+      sb_appendf(sb, "  b.lo bf_underflow\n");
+      break;
+
+    case OP_INC:
+      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  add w1, w0, %zu\n", op.rep_or_jump_idx % 256);
+      sb_appendf(sb, "  strb w1, [%s, %s]\n", tape_base, tape_index);
+      break;
+    case OP_DEC:
+      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  add w1, w0, %zu\n", 256 - (op.rep_or_jump_idx % 256));
+      sb_appendf(sb, "  strb w1, [%s, %s]\n", tape_base, tape_index);
+      break;
+
+    case OP_OUTPUT:
+      for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
+        sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+        sb_appendf(sb, "  bl _putchar\n");
+      }
+      break;
+    case OP_INPUT:
+      TODO("input not yet valid we need to set up the terminal for this");
+      for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
+        sb_appendf(sb, "  bl _getchar\n");
+      }
+      sb_appendf(sb, "  strb w0, [%s, %s]\n", tape_base, tape_index);
+      break;
+
+    case OP_JUMP_FOREWARD:
+      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  cbz w0, label_f_%zu\n", op.rep_or_jump_idx);
+      sb_appendf(sb, "label_b_%zu:\n", i);
+      break;
+    case OP_JUMP_BACKWARD:
+      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  cbnz w0, label_b_%zu\n", op.rep_or_jump_idx);
+      sb_appendf(sb, "label_f_%zu:\n", i);
+      break;
+    }
+  }
+
+  // Postlude return success
+  sb_appendf(sb, "  mov x0, 1\n"); // true for success
+  // Postlude
+  sb_appendf(sb, "bf_postlude:\n");
+  sb_appendf(sb, "  ldp x29, x30, [sp, 16]\n");
+  sb_appendf(sb, "  ldp %s, %s, [sp]\n", tape_base, tape_index);
+  sb_appendf(sb, "  add sp, sp, 32\n");
+  sb_appendf(sb, "  ret\n");
+
+  sb_appendf(sb, "bf_overflow:\n");
+  sb_appendf(sb, "  adr x1, overflow_msg\n");
+  sb_appendf(sb, "  b bf_exit_err\n");
+
+  sb_appendf(sb, "bf_underflow:\n");
+  sb_appendf(sb, "  adr x1, underflow_msg\n");
+
+  sb_appendf(sb, "bf_exit_err:\n");
+  sb_appendf(sb, "  mov x0, 2\n");
+  sb_appendf(sb, "  bl _fprintf\n");
+  sb_appendf(sb, "  mov x0, 0\n"); // false for error
+  sb_appendf(sb, "  b bf_postlude\n");
+
+  sb_appendf(sb, "overflow_msg:\n");
+  sb_appendf(sb, "  .asciz \"OVERFLOW\\n\"\n");
+  sb_appendf(sb, "underflow_msg:\n");
+  sb_appendf(sb, "  .asciz \"UNDERFLOW\\n\"\n");
+}
+
 int main(int argc, char **argv) {
   char *p_name = *argv;
   shift(argv, argc);
@@ -361,6 +481,33 @@ int main(int argc, char **argv) {
 
   if (!parse_bf(sb_to_sv(contents), &ir))
     return -1;
+
+  String_Builder asm_buf = {0};
+  append_freestanding_main(&asm_buf);
+  translate_to_asm(&asm_buf, &ir);
+  sb_append_null(&asm_buf);
+
+  char *asm_file = "bf-main.s";
+  FILE *file = fopen(asm_file, "w");
+  if (file == NULL) {
+    fprintf(stderr, "could not open %s\n", asm_file);
+  }
+  fprintf(file, "%s", asm_buf.items);
+  fclose(file);
+
+  Cmd cmd = {0};
+  cmd_append(&cmd, "clang", "-arch", "arm64", "-c", "-o", "bf-main.o",
+             "bf-main.s");
+  if (!cmd_run(&cmd)) {
+    fprintf(stderr, "could not compile to object\n");
+    return -1;
+  }
+  cmd_append(&cmd, "clang", "-arch", "arm64", "-o", "bf-main", "bf-main.o");
+  if (!cmd_run(&cmd)) {
+    fprintf(stderr, "could not compile to executable\n");
+    return -1;
+  }
+  return 0;
 
   if (!ir_interpret(&ir)) {
     fprintf(stderr, "Encountered underflow");
