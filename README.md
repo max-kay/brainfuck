@@ -80,7 +80,7 @@ underflow_msg:
 ### (`R`, n)
 ```asm
   add xindx, xindx, n
-  cmp xindx, TAPE_SIZE
+  cmp xindx, TAPE_LEN
   b.hs bf_overflow
 ```
 
@@ -116,7 +116,6 @@ underflow_msg:
   cbnz w0, offset(a)
 ```
 
-
 ### (`O`, n)
 ```asm
   ldrb w0, [xbase, xindx]
@@ -130,3 +129,4 @@ repeated n times
   strb w0, [xbase, xindx]
 ```
 repeated n times
+

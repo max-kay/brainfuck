@@ -290,10 +290,15 @@ bool ir_interpret(Intermediate *ir) {
 
     case OP_MOVE_RIGHT:
       tape_ptr += op.rep_or_jump_idx;
+      if (tape_ptr >= TAPE_LEN) {
+        fprintf(stderr, "OVERFLOW");
+        goto error;
+      }
       instruction_ptr++;
       break;
     case OP_MOVE_LEFT:
       if (op.rep_or_jump_idx > tape_ptr) {
+        fprintf(stderr, "UNDERFLOW");
         goto error;
       }
       tape_ptr -= op.rep_or_jump_idx;
@@ -337,10 +342,11 @@ error:
   return false;
 }
 
-void print_ir(Intermediate *ir) {
+void append_ir(String_Builder *sb, Intermediate *ir) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
-    printf("%0*zu: %s %*zu\n", 3, i, op_as_str(op.op), 4, op.rep_or_jump_idx);
+    sb_appendf(sb, "%0*zu: %s %*zu\n", 3, i, op_as_str(op.op), 4,
+               op.rep_or_jump_idx);
   }
 }
 
