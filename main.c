@@ -15,6 +15,25 @@
 //
 #define TAPE_LEN 1024 * 4
 
+#define ENCODE_INSTR(insn)                                                     \
+  ({                                                                           \
+    uint32_t _enc;                                                             \
+    __asm__ volatile("b 1f\n"                                                  \
+                     "2: " insn "\n"                                           \
+                     "1: ldr %w0, 2b\n"                                        \
+                     : "=r"(_enc));                                            \
+    _enc;                                                                      \
+  })
+
+#define INDEX_REG (uint32_t)19
+#define INDEX_REG_STR "x19"
+#define BASE_REG (uint32_t)20
+#define BASE_REG_STR "x20"
+#define PUTC_REG 21
+#define PUTC_REG_STR "x21"
+#define GETC_REG 22
+#define GETC_REG_STR "x22"
+
 static struct termios orig_termios;
 
 void init_terminal(void) {
@@ -373,49 +392,46 @@ void append_freestanding_main(String_Builder *sb) {
 // generates the function:
 // bool brainfuck_function(void *tape_ptr)
 void translate_to_asm(String_Builder *sb, Intermediate *ir) {
-  char *tape_base = "x20";
-  char *tape_index = "x21";
-
   // Prelude
   sb_appendf(sb, ".globl _bf_assembled\n");
   sb_appendf(sb, "_bf_assembled:\n");
   sb_appendf(sb, "  sub sp, sp, 32\n");
   sb_appendf(sb, "  stp x29, x30, [sp, 16]\n");
-  sb_appendf(sb, "  stp %s, %s, [sp]\n", tape_base, tape_index);
+  sb_appendf(sb, "  stp %s, %s, [sp]\n", BASE_REG_STR, INDEX_REG_STR);
   sb_appendf(sb, "  mov x29, sp\n");
-  sb_appendf(sb, "  mov %s, x0\n", tape_base);
-  sb_appendf(sb, "  mov %s, xzr\n", tape_index);
+  sb_appendf(sb, "  mov %s, x0\n", BASE_REG_STR);
+  sb_appendf(sb, "  mov %s, xzr\n", INDEX_REG_STR);
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
     switch (op.op) {
     case OP_MOVE_RIGHT:
       // sb_appendf(sb, "  brk #0xf000\n");
-      sb_appendf(sb, "  add %s, %s, %zu\n", tape_index, tape_index,
+      sb_appendf(sb, "  add %s, %s, %zu\n", INDEX_REG_STR, INDEX_REG_STR,
                  op.rep_or_jump_idx);
-      sb_appendf(sb, "  cmp %s, %d\n", tape_index, TAPE_LEN);
+      sb_appendf(sb, "  cmp %s, %d\n", INDEX_REG_STR, TAPE_LEN);
       sb_appendf(sb, "  b.hs bf_overflow\n");
       break;
     case OP_MOVE_LEFT:
       // sb_appendf(sb, "  brk #0xf000\n");
-      sb_appendf(sb, "  subs %s, %s, %zu\n", tape_index, tape_index,
+      sb_appendf(sb, "  subs %s, %s, %zu\n", INDEX_REG_STR, INDEX_REG_STR,
                  op.rep_or_jump_idx);
       sb_appendf(sb, "  b.lo bf_underflow\n");
       break;
 
     case OP_INC:
-      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
       sb_appendf(sb, "  add w1, w0, %zu\n", op.rep_or_jump_idx % 256);
-      sb_appendf(sb, "  strb w1, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  strb w1, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
       break;
     case OP_DEC:
-      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
       sb_appendf(sb, "  add w1, w0, %zu\n", 256 - (op.rep_or_jump_idx % 256));
-      sb_appendf(sb, "  strb w1, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  strb w1, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
       break;
 
     case OP_OUTPUT:
       for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
-        sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+        sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
         sb_appendf(sb, "  bl _putchar\n");
       }
       break;
@@ -424,16 +440,16 @@ void translate_to_asm(String_Builder *sb, Intermediate *ir) {
       for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
         sb_appendf(sb, "  bl _getchar\n");
       }
-      sb_appendf(sb, "  strb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  strb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
       break;
 
     case OP_JUMP_FOREWARD:
-      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
       sb_appendf(sb, "  cbz w0, label_f_%zu\n", op.rep_or_jump_idx);
       sb_appendf(sb, "label_b_%zu:\n", i);
       break;
     case OP_JUMP_BACKWARD:
-      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", tape_base, tape_index);
+      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
       sb_appendf(sb, "  cbnz w0, label_b_%zu\n", op.rep_or_jump_idx);
       sb_appendf(sb, "label_f_%zu:\n", i);
       break;
@@ -445,7 +461,7 @@ void translate_to_asm(String_Builder *sb, Intermediate *ir) {
   // Postlude
   sb_appendf(sb, "bf_postlude:\n");
   sb_appendf(sb, "  ldp x29, x30, [sp, 16]\n");
-  sb_appendf(sb, "  ldp %s, %s, [sp]\n", tape_base, tape_index);
+  sb_appendf(sb, "  ldp %s, %s, [sp]\n", BASE_REG_STR, INDEX_REG_STR);
   sb_appendf(sb, "  add sp, sp, 32\n");
   sb_appendf(sb, "  ret\n");
 
@@ -467,6 +483,99 @@ void translate_to_asm(String_Builder *sb, Intermediate *ir) {
   sb_appendf(sb, "underflow_msg:\n");
   sb_appendf(sb, "  .asciz \"UNDERFLOW\\n\"\n");
 }
+
+typedef uint32_t instr;
+
+instr add_idx(size_t n) {
+  // [sf=1]00100010[sh=0][imm12][xindx5][xindx5]
+  NOB_ASSERT(n < 1 << 12);
+  instr out = ENCODE_INSTR("subs " INDEX_REG_STR ", " INDEX_REG_STR ", 0");
+  out |= n << 10;
+  return out;
+}
+
+instr sub_idx_with_flag(size_t n) {
+  // [sf=1]11100010[sh=0][imm12][xindx5][xindx5]
+  NOB_ASSERT(n < 1 << 12);
+  instr out = ENCODE_INSTR("subs " INDEX_REG_STR ", " INDEX_REG_STR ", 0");
+  out |= n << 10;
+  return out;
+}
+
+instr add(uint8_t dst, uint8_t src, size_t n) {
+  // [sf=0]00100010[sh=0][imm12][src5][dst5]
+  NOB_ASSERT(n < 1 << 12);
+  NOB_ASSERT(src < 8);
+  NOB_ASSERT(dst < 8);
+  instr out = ENCODE_INSTR("add w0, w0, 0");
+  out |= dst;
+  out |= src << 5;
+  out |= n << 10;
+  return out;
+}
+
+instr mask(uint8_t dst, uint8_t src) {
+  instr out = ENCODE_INSTR("and w0, w0, 0xFF");
+  NOB_ASSERT(src < 8);
+  NOB_ASSERT(dst < 8);
+  out |= dst;
+  out |= src << 5;
+  return out;
+}
+
+instr cmp() {
+  // [sf=1]11100010[sh=0][imm12][xindx5][xzr5=11111]
+  NOB_ASSERT(TAPE_LEN < 1 << 12);
+  instr out = ENCODE_INSTR("cmp " INDEX_REG_STR ", 0");
+  out |= TAPE_LEN << 10;
+  return out;
+}
+
+instr bhs() { return ENCODE_INSTR("b.hs 0"); }
+
+instr blo() { return ENCODE_INSTR("b.lo 0"); }
+
+instr cbz(uint8_t reg) {
+  // [sf=0]0110100[imm19][reg5]
+  NOB_ASSERT(reg < 8);
+  instr out = ENCODE_INSTR("cbz w0, 0");
+  out |= reg;
+  return out;
+}
+
+instr cbnz(uint8_t reg) {
+  // [sf=0]0110101[imm19][reg5]
+  NOB_ASSERT(reg < 8);
+  instr out = ENCODE_INSTR("cbnz w0, 0");
+  out |= reg;
+  return out;
+}
+
+void update_branch(instr *op, int32_t offset) {
+  // offset is 4 times bytelen or instruction count
+  NOB_ASSERT(offset >= -(1 << 18) && offset < (1 << 18));
+  *op |= ((uint32_t)offset & 0x7FFFF) << 5;
+}
+
+instr ld_tape(uint8_t reg) {
+  // 00111000011[xindx5][option3=011][S=0]10[xbase5][reg5]
+  NOB_ASSERT(reg < 8);
+  instr out = ENCODE_INSTR("ldrb w0, [" BASE_REG_STR ", " INDEX_REG_STR "]");
+  out |= reg;
+  return out;
+}
+
+instr str_tape(uint8_t reg) {
+  // 00111000001[xindx5][option3=011][S=0]10[xbase5][reg5]
+  NOB_ASSERT(reg < 8);
+  instr out = ENCODE_INSTR("strb w0, [" BASE_REG_STR ", " INDEX_REG_STR "]");
+  out |= reg;
+  return out;
+}
+
+instr blr_putc() { return ENCODE_INSTR("blr " PUTC_REG_STR); }
+
+instr blr_getc() { return ENCODE_INSTR("blr " GETC_REG_STR); }
 
 int main(int argc, char **argv) {
   char *p_name = *argv;
