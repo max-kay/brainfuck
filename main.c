@@ -1,8 +1,11 @@
 #include <errno.h>
+#include <libkern/OSCacheControl.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <termios.h>
@@ -14,6 +17,21 @@
 // #define DEBUG
 //
 #define TAPE_LEN 1024 * 4
+
+#if defined(__APPLE__)
+#define SYM(x) "_" #x // Mach-O prepends an underscore
+#else
+#define SYM(x) #x
+#endif
+
+#define ENCODE_ASM(text, startptr, endptr)                                     \
+  __asm__(".text\n"                                                            \
+          ".balign 4\n"                                                        \
+          ".globl " SYM(startptr) "\n" SYM(                                    \
+              startptr) ":\n" text "\n"                                        \
+                        ".globl " SYM(endptr) "\n" SYM(endptr) ":\n");         \
+  extern const uint32_t startptr[];                                            \
+  extern const uint32_t endptr[];
 
 #define ENCODE_INSTR(insn)                                                     \
   ({                                                                           \
@@ -45,6 +63,12 @@ void init_terminal(void) {
 }
 
 void reset_terminal(void) { tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios); }
+
+typedef enum {
+  Bf_R_Ok = 0,
+  Bf_R_Underflow = 1,
+  Bf_R_Overflow = 2,
+} Bf_Result;
 
 typedef enum {
   TOK_MOVE_LEFT,
@@ -178,9 +202,9 @@ typedef struct {
   size_t capacity;
 } Intermediate;
 
-void *get_jit_region(size_t len) {
-  void *ptr = mmap(NULL, len, PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_JIT | MAP_ANON, 0, 0);
+void *get_jit_region(size_t size) {
+  void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
 
   if (ptr == MAP_FAILED) {
     fprintf(stderr, "could not create memory mapping: %s\n", strerror(errno));
@@ -193,10 +217,10 @@ typedef struct {
   size_t *items;
   size_t count;
   size_t capacity;
-} JumpForwardIndecies;
+} Index_Array;
 
 bool parse_bf(String_View iter, Intermediate *ir) {
-  JumpForwardIndecies idxs = {0};
+  Index_Array idxs = {0};
 
   Token prev_token = TOK_START;
   while (true) {
@@ -277,7 +301,7 @@ void tape_write(Tape *tape, size_t idx, uint8_t val) {
   tape->items[idx] = val;
 }
 
-bool ir_interpret(Intermediate *ir) {
+Bf_Result ir_interpret(Intermediate *ir) {
   init_terminal();
 
   size_t instruction_ptr = 0;
@@ -310,15 +334,13 @@ bool ir_interpret(Intermediate *ir) {
     case OP_MOVE_RIGHT:
       tape_ptr += op.rep_or_jump_idx;
       if (tape_ptr >= TAPE_LEN) {
-        fprintf(stderr, "OVERFLOW");
-        goto error;
+        goto overflow;
       }
       instruction_ptr++;
       break;
     case OP_MOVE_LEFT:
       if (op.rep_or_jump_idx > tape_ptr) {
-        fprintf(stderr, "UNDERFLOW");
-        goto error;
+        goto underflow;
       }
       tape_ptr -= op.rep_or_jump_idx;
       instruction_ptr++;
@@ -354,11 +376,15 @@ bool ir_interpret(Intermediate *ir) {
 
   da_free(tape);
   reset_terminal();
-  return true;
-error:
+  return Bf_R_Ok;
+underflow:
   da_free(tape);
   reset_terminal();
-  return false;
+  return Bf_R_Underflow;
+overflow:
+  da_free(tape);
+  reset_terminal();
+  return Bf_R_Overflow;
 }
 
 void append_ir(String_Builder *sb, Intermediate *ir) {
@@ -457,7 +483,7 @@ void translate_to_asm(String_Builder *sb, Intermediate *ir) {
   }
 
   // Postlude return success
-  sb_appendf(sb, "  mov x0, 1\n"); // true for success
+  sb_appendf(sb, "  mov x0, %u\n", Bf_R_Ok);
   // Postlude
   sb_appendf(sb, "bf_postlude:\n");
   sb_appendf(sb, "  ldp x29, x30, [sp, 16]\n");
@@ -465,23 +491,13 @@ void translate_to_asm(String_Builder *sb, Intermediate *ir) {
   sb_appendf(sb, "  add sp, sp, 32\n");
   sb_appendf(sb, "  ret\n");
 
-  sb_appendf(sb, "bf_overflow:\n");
-  sb_appendf(sb, "  adr x1, overflow_msg\n");
-  sb_appendf(sb, "  b bf_exit_err\n");
-
   sb_appendf(sb, "bf_underflow:\n");
-  sb_appendf(sb, "  adr x1, underflow_msg\n");
-
-  sb_appendf(sb, "bf_exit_err:\n");
-  sb_appendf(sb, "  mov x0, 2\n");
-  sb_appendf(sb, "  bl _fprintf\n");
-  sb_appendf(sb, "  mov x0, 0\n"); // false for error
+  sb_appendf(sb, "  mov x0, %u\n", Bf_R_Underflow);
   sb_appendf(sb, "  b bf_postlude\n");
 
-  sb_appendf(sb, "overflow_msg:\n");
-  sb_appendf(sb, "  .asciz \"OVERFLOW\\n\"\n");
-  sb_appendf(sb, "underflow_msg:\n");
-  sb_appendf(sb, "  .asciz \"UNDERFLOW\\n\"\n");
+  sb_appendf(sb, "bf_overflow:\n");
+  sb_appendf(sb, "  mov x0, %u\n", Bf_R_Overflow);
+  sb_appendf(sb, "  b bf_postlude\n");
 }
 
 typedef uint32_t instr;
@@ -489,7 +505,7 @@ typedef uint32_t instr;
 instr add_idx(size_t n) {
   // [sf=1]00100010[sh=0][imm12][xindx5][xindx5]
   NOB_ASSERT(n < 1 << 12);
-  instr out = ENCODE_INSTR("subs " INDEX_REG_STR ", " INDEX_REG_STR ", 0");
+  instr out = ENCODE_INSTR("add " INDEX_REG_STR ", " INDEX_REG_STR ", 0");
   out |= n << 10;
   return out;
 }
@@ -523,11 +539,13 @@ instr mask(uint8_t dst, uint8_t src) {
   return out;
 }
 
-instr cmp() {
-  // [sf=1]11100010[sh=0][imm12][xindx5][xzr5=11111]
-  NOB_ASSERT(TAPE_LEN < 1 << 12);
-  instr out = ENCODE_INSTR("cmp " INDEX_REG_STR ", 0");
-  out |= TAPE_LEN << 10;
+instr cmp_idx() {
+  // [sf=1]11100010[sh=1][imm12][xindx5][xzr5=11111]
+  NOB_ASSERT((TAPE_LEN & ((1 << 12) - 1)) == 0);
+  size_t shifted = TAPE_LEN >> 12;
+  NOB_ASSERT(shifted < 1 << 12);
+  instr out = ENCODE_INSTR("cmp " INDEX_REG_STR ", 0, lsl 12");
+  out |= shifted << 10;
   return out;
 }
 
@@ -551,10 +569,15 @@ instr cbnz(uint8_t reg) {
   return out;
 }
 
-void update_branch(instr *op, int32_t offset) {
+void link_cond_branch(instr *op, ptrdiff_t offset) {
   // offset is 4 times bytelen or instruction count
   NOB_ASSERT(offset >= -(1 << 18) && offset < (1 << 18));
   *op |= ((uint32_t)offset & 0x7FFFF) << 5;
+}
+
+void link_uncond_branch(instr *op, ptrdiff_t offset) {
+  NOB_ASSERT(offset >= -(1 << 26) && offset < (1 << 26));
+  *op |= ((uint32_t)offset & ((1 << 26) - 1));
 }
 
 instr ld_tape(uint8_t reg) {
@@ -577,12 +600,171 @@ instr blr_putc() { return ENCODE_INSTR("blr " PUTC_REG_STR); }
 
 instr blr_getc() { return ENCODE_INSTR("blr " GETC_REG_STR); }
 
+typedef struct {
+  instr *items;
+  size_t count;
+  size_t capacity;
+} Instructions;
+
+typedef int (*putchar_type)(int);
+typedef int (*getchar_type)(void);
+typedef Bf_Result (*jit_fn_type)(uint8_t *, putchar_type, getchar_type);
+
+ENCODE_ASM("  sub sp, sp, 48\n"
+           "  stp x29, x30, [sp, 32]\n"
+           "  mov x29, sp\n"
+           "  stp " INDEX_REG_STR ", " BASE_REG_STR ", [sp, 16]\n"
+           "  stp " PUTC_REG_STR ", " GETC_REG_STR ", [sp]\n"
+           "  mov " INDEX_REG_STR ", xzr\n"
+           "  mov " BASE_REG_STR ", x0\n"
+           "  mov " PUTC_REG_STR ", x1\n"
+           "  mov " GETC_REG_STR ", x2\n",
+           PRELUDE_START, PRELUDE_END);
+
+ENCODE_ASM("  ldp x29, x30, [sp, 32]\n"
+           "  ldp " INDEX_REG_STR ", " BASE_REG_STR ", [sp, 16]\n"
+           "  ldp " PUTC_REG_STR ", " GETC_REG_STR ", [sp]\n"
+           "  add sp, sp, 48\n"
+           "  ret\n",
+           POSTLUDE_START, POSTLUDE_END);
+
+typedef struct {
+  size_t foreward_irop_idx, backward_irop_idx, start_b_index;
+} BranchEntry;
+
+typedef struct {
+  BranchEntry *items;
+  size_t count;
+  size_t capacity;
+} BranchList;
+
+size_t jl_find(BranchList *jl, size_t ir_op_idx) {
+  for (size_t i = 0; i < jl->count; i++) {
+    if (jl->items[i].foreward_irop_idx == ir_op_idx) {
+      return i;
+    }
+  }
+  return SIZE_MAX;
+}
+
+void translate_to_code(Instructions *code, Intermediate *ir) {
+  // TODO: check all branch instructions for of by one errors
+  // compare with notes.md
+  Index_Array needs_overflow_update = {0};
+  Index_Array needs_underflow_update = {0};
+  BranchList branch_list = {0};
+  da_append_many(code, PRELUDE_START, PRELUDE_END - PRELUDE_START);
+
+  for (size_t i = 0; i < ir->count; i++) {
+    Operation op = ir->items[i];
+    switch (op.op) {
+    case OP_MOVE_RIGHT:
+      da_append(code, add_idx(op.rep_or_jump_idx));
+      da_append(code, cmp_idx());
+      da_append(&needs_overflow_update, code->count);
+      da_append(code, bhs());
+      break;
+    case OP_MOVE_LEFT:
+      da_append(code, sub_idx_with_flag(op.rep_or_jump_idx));
+      da_append(&needs_underflow_update, code->count);
+      da_append(code, blo());
+      break;
+
+    case OP_INC:
+      da_append(code, ld_tape(0));
+      da_append(code, add(0, 0, op.rep_or_jump_idx % 256));
+      da_append(code, str_tape(0));
+      break;
+    case OP_DEC:
+      da_append(code, ld_tape(0));
+      da_append(code, add(0, 0, 256 - (op.rep_or_jump_idx % 256)));
+      da_append(code, str_tape(0));
+      break;
+
+    case OP_OUTPUT:
+      for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
+        da_append(code, ld_tape(0));
+        da_append(code, blr_putc());
+      }
+      break;
+    case OP_INPUT:
+      for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
+        da_append(code, blr_getc());
+      }
+      da_append(code, str_tape(0));
+      break;
+
+    case OP_JUMP_FOREWARD:
+      da_append(code, ld_tape(0));
+      da_append(code, cbz(0));
+      BranchEntry pair = {
+          .foreward_irop_idx = i,
+          .backward_irop_idx = op.rep_or_jump_idx,
+          .start_b_index = code->count - 1,
+      };
+      da_append(&branch_list, pair);
+      break;
+    case OP_JUMP_BACKWARD:
+      da_append(code, ld_tape(0));
+      ptrdiff_t upper_b_idx = (ptrdiff_t)code->count;
+      da_append(code, cbnz(0));
+
+      size_t idx = jl_find(&branch_list, op.rep_or_jump_idx);
+      NOB_ASSERT(idx != SIZE_MAX);
+      NOB_ASSERT(branch_list.items[idx].foreward_irop_idx ==
+                 op.rep_or_jump_idx);
+
+      ptrdiff_t lower_b_idx = branch_list.items[idx].start_b_index;
+
+      // link the branches
+      link_cond_branch(&code->items[lower_b_idx],
+                       (upper_b_idx + 1) - lower_b_idx);
+      link_cond_branch(&code->items[upper_b_idx],
+                       (lower_b_idx + 1) - upper_b_idx);
+      break;
+    }
+  }
+  da_append(code, ENCODE_INSTR("mov x0, 0")); // Bf_R_Ok
+  size_t postlude_idx = code->count;
+  da_append_many(code, POSTLUDE_START, POSTLUDE_END - POSTLUDE_START);
+
+  size_t underflow_idx = code->count;
+  da_append(code, ENCODE_INSTR("mov x0, 1")); // Bf_R_Underflow
+  da_append(code, ENCODE_INSTR("b 0"));
+  link_uncond_branch(&code->items[code->count - 1],
+                     (ptrdiff_t)postlude_idx - ((ptrdiff_t)code->count - 1));
+
+  size_t overflow_idx = code->count;
+  da_append(code, ENCODE_INSTR("mov x0, 2")); // Bf_R_Overflow
+  da_append(code, ENCODE_INSTR("b 0"));
+  link_uncond_branch(&code->items[code->count - 1],
+                     (ptrdiff_t)postlude_idx - ((ptrdiff_t)code->count - 1));
+
+  // link underflow return
+  for (size_t i = 0; i < needs_underflow_update.count; i++) {
+    size_t code_idx = needs_underflow_update.items[i];
+    link_cond_branch(&code->items[code_idx],
+                     (ptrdiff_t)underflow_idx - (ptrdiff_t)code_idx);
+  }
+
+  // link overflow return
+  for (size_t i = 0; i < needs_overflow_update.count; i++) {
+    size_t code_idx = needs_overflow_update.items[i];
+    link_cond_branch(&code->items[code_idx],
+                     (ptrdiff_t)overflow_idx - (ptrdiff_t)code_idx);
+  }
+
+  da_free(needs_underflow_update);
+  da_free(needs_overflow_update);
+  da_free(branch_list);
+}
+
 int main(int argc, char **argv) {
   char *p_name = *argv;
   shift(argv, argc);
 
   if (argc == 0 | argc > 1) {
-    printf("Usage %s <filename.bf>\n", p_name);
+    fprintf(stderr, "Usage %s <filename.bf>\n", p_name);
     return -1;
   }
 
@@ -597,36 +779,77 @@ int main(int argc, char **argv) {
   if (!parse_bf(sb_to_sv(contents), &ir))
     return -1;
 
-  String_Builder asm_buf = {0};
-  append_freestanding_main(&asm_buf);
-  translate_to_asm(&asm_buf, &ir);
-  sb_append_null(&asm_buf);
+  // String_Builder asm_buf = {0};
+  // append_freestanding_main(&asm_buf);
+  // translate_to_asm(&asm_buf, &ir);
+  // sb_append_null(&asm_buf);
+  //
+  // char *asm_file = "bf-main.s";
+  // FILE *file = fopen(asm_file, "w");
+  // if (file == NULL) {
+  //   fprintf(stderr, "could not open %s\n", asm_file);
+  // }
+  // fprintf(file, "%s", asm_buf.items);
+  // fclose(file);
+  //
+  // Cmd cmd = {0};
+  // cmd_append(&cmd, "clang", "-arch", "arm64", "-c", "-o", "bf-main.o",
+  //            "bf-main.s");
+  // if (!cmd_run(&cmd)) {
+  //   fprintf(stderr, "could not compile to object\n");
+  //   return -1;
+  // }
+  // cmd_append(&cmd, "clang", "-arch", "arm64", "-o", "bf-main", "bf-main.o");
+  // if (!cmd_run(&cmd)) {
+  //   fprintf(stderr, "could not compile to executable\n");
+  //   return -1;
+  // }
 
-  char *asm_file = "bf-main.s";
-  FILE *file = fopen(asm_file, "w");
-  if (file == NULL) {
-    fprintf(stderr, "could not open %s\n", asm_file);
-  }
-  fprintf(file, "%s", asm_buf.items);
-  fclose(file);
+  Instructions code = {0};
+  translate_to_code(&code, &ir);
 
-  Cmd cmd = {0};
-  cmd_append(&cmd, "clang", "-arch", "arm64", "-c", "-o", "bf-main.o",
-             "bf-main.s");
-  if (!cmd_run(&cmd)) {
-    fprintf(stderr, "could not compile to object\n");
-    return -1;
+  void *code_ptr = get_jit_region(code.count * sizeof(code.items[0]));
+
+  if (code_ptr == NULL) {
+    fprintf(stderr, "could not allocate jit memory region\n");
+    return 0;
   }
-  cmd_append(&cmd, "clang", "-arch", "arm64", "-o", "bf-main", "bf-main.o");
-  if (!cmd_run(&cmd)) {
-    fprintf(stderr, "could not compile to executable\n");
-    return -1;
+
+  pthread_jit_write_protect_np(0);
+  memcpy(code_ptr, code.items, code.count * sizeof(code.items[0]));
+  pthread_jit_write_protect_np(1);
+  sys_icache_invalidate(code_ptr, code.count * sizeof(code.items[0]));
+
+  jit_fn_type jit_func = (jit_fn_type)code_ptr;
+
+  uint8_t *tape_ptr = malloc(TAPE_LEN);
+  if (tape_ptr == NULL) {
+    fprintf(stderr, "could not allocate tape memory region\n");
+    return 0;
+  }
+  memset(tape_ptr, 0, TAPE_LEN);
+
+  switch (jit_func(tape_ptr, putchar, getchar)) {
+  case Bf_R_Ok:
+    break;
+  case Bf_R_Underflow:
+    fprintf(stderr, "UNDERFLOW\n");
+    break;
+  case Bf_R_Overflow:
+    fprintf(stderr, "OVERFLOW\n");
+    break;
   }
   return 0;
 
-  if (!ir_interpret(&ir)) {
-    fprintf(stderr, "Encountered underflow");
-    return -1;
+  switch (ir_interpret(&ir)) {
+  case Bf_R_Ok:
+    break;
+  case Bf_R_Underflow:
+    fprintf(stderr, "UNDERFLOW\n");
+    break;
+  case Bf_R_Overflow:
+    fprintf(stderr, "OVERFLOW\n");
+    break;
   }
 
   return 0;
