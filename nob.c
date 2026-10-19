@@ -3,81 +3,99 @@
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
+#define BIN_PATH "./bf-jit"
+#define CC "clang"
+
 #define TEST_PATH "tests"
 
 static Cmd CMD = {0};
 
 bool run_test(String_View test_name) {
+  // TODO: use
+  // NOBDEF char *nob_temp_dir_name(const char *path);
+  // NOBDEF char *nob_tem./bf-jitp_file_name(const char *path);
+  // NOBDEF char *nob_temp_file_ext(const char *path);
   size_t alloc_mark = temp_save();
-  String_Builder expected = {0};
+  String_Builder sb_expected = {0};
   String_Builder output = {0};
+  bool test_passed = false;
 
   char *path_expected =
       temp_sprintf("%s/" SV_Fmt ".expected", TEST_PATH, SV_Arg(test_name));
   if (!file_exists(path_expected)) {
     nob_log(ERROR, "could not find expected output for test " SV_Fmt,
             SV_Arg(test_name));
-    goto error;
+    goto tail;
   }
 
-  if (!read_entire_file(path_expected, &expected)) {
-    goto error;
+  if (!read_entire_file(path_expected, &sb_expected)) {
+    goto tail;
   };
 
-  bool should_fail = false;
-  if (sv_starts_with(sb_to_sv(expected), SVLIT("SHOULD FAIL")))
-    should_fail = true;
+  String_View expected_output = sb_to_sv(sb_expected);
+  bool should_fail = sv_chop_prefix(&expected_output, SVLIT("SHOULD FAIL\n"));
+
+  char *stdout_path =
+      temp_sprintf("/tmp/bf_test_" SV_Fmt ".stdout", SV_Arg(test_name));
+  char *stderr_path = NULL;
+  if (should_fail) {
+    stderr_path =
+        temp_sprintf("/tmp/bf_test_" SV_Fmt ".stderr", SV_Arg(test_name));
+  }
 
   char *input_path =
       temp_sprintf("%s/" SV_Fmt ".in", TEST_PATH, SV_Arg(test_name));
-  bool has_input = file_exists(input_path);
 
-  cmd_append(&CMD, "./main",
+  if (!file_exists(input_path)) {
+    input_path = NULL;
+  }
+
+  cmd_append(&CMD, BIN_PATH, "--test-output",
              temp_sprintf("%s/" SV_Fmt ".bf", TEST_PATH, SV_Arg(test_name)));
 
-  const char *stdout_path =
-      temp_sprintf("/tmp/bf_test_" SV_Fmt ".stdout", SV_Arg(test_name));
-  bool cmd_failed;
-  if (has_input) {
-    cmd_failed =
-        !cmd_run(&CMD, .stdin_path = input_path, .stdout_path = stdout_path,
-                 .stderr_path = "/dev/null");
-  } else {
-    cmd_failed =
-        !cmd_run(&CMD, .stdout_path = stdout_path, .stderr_path = "/dev/null");
-  }
+  bool cmd_failed =
+      !cmd_run(&CMD, .stdin_path = input_path, .stdout_path = stdout_path,
+               .stderr_path = stderr_path);
 
   if (!read_entire_file(stdout_path, &output)) {
     nob_log(WARNING, "could not read output of test " SV_Fmt,
             SV_Arg(test_name));
-  }
-
-  if (cmd_failed) {
-    if (should_fail)
-      goto ok;
-    goto error;
+    goto tail;
   }
 
   if (should_fail) {
-    goto error;
+    if (!cmd_failed) {
+      goto tail;
+    } else {
+      output.count = 0;
+      if (!read_entire_file(stderr_path, &output)) {
+        nob_log(WARNING, "could not read err output of test " SV_Fmt,
+                SV_Arg(test_name));
+        goto tail;
+      }
+    }
+  } else {
+    if (cmd_failed) {
+      goto tail;
+    }
   }
-
-  if (expected.count != output.count) {
-    goto error;
+  if (expected_output.count != output.count ||
+      strncmp(output.items, expected_output.items, output.count) != 0) {
+    nob_log(ERROR,
+            "test " SV_Fmt " failed\n"
+            "  expected `" SV_Fmt "`\n"
+            "  got `" SV_Fmt "`\n",
+            SV_Arg(test_name), SV_Arg(expected_output),
+            SV_Arg(sb_to_sv(output)));
+    goto tail;
   }
-  if (strncmp(output.items, expected.items, output.count) != 0)
-    goto error;
+  test_passed = true;
 
-ok:
+tail:
   temp_rewind(alloc_mark);
-  da_free(expected);
+  da_free(sb_expected);
   da_free(output);
-  return true;
-error:
-  temp_rewind(alloc_mark);
-  da_free(expected);
-  da_free(output);
-  return false;
+  return test_passed;
 }
 
 bool run_all_tests() {
@@ -112,7 +130,7 @@ int main(int argc, char **argv) {
     shift(argv, argc);
   }
 
-  cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Werror", "-o", "main", "-O3",
+  cmd_append(&CMD, CC, "-Wall", "-Wextra", "-Werror", "-o", BIN_PATH, "-O3",
              "main.c");
   if (!cmd_run(&CMD))
     return 1;

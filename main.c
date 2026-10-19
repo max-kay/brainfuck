@@ -15,8 +15,6 @@
 #include "nob.h"
 
 // #define DEBUG
-//
-#define TAPE_LEN 1024 * 4
 
 #if defined(__APPLE__)
 #define SYM(x) "_" #x // Mach-O prepends an underscore
@@ -47,10 +45,12 @@
 #define INDEX_REG_STR "x19"
 #define BASE_REG (uint32_t)20
 #define BASE_REG_STR "x20"
-#define PUTC_REG 21
+#define PUTC_REG (uint32_t)21
 #define PUTC_REG_STR "x21"
-#define GETC_REG 22
+#define GETC_REG (uint32_t)22
 #define GETC_REG_STR "x22"
+
+#define MIN_TAPE_LEN ((size_t)(1 << 12))
 
 static struct termios orig_termios;
 
@@ -64,11 +64,69 @@ void init_terminal(void) {
 
 void reset_terminal(void) { tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios); }
 
+// COMMANDLINE CONFIG
+static bool TEST_OUTPUT = false;
+static bool RUN_JIT = true;
+static bool RUN_IR = false;
+static bool STATS = false;
+static bool EMIT_IR = false;
+static size_t TAPE_LEN = 1024 * 4;
+
+static inline void *get_jit_region(size_t size) {
+  void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+  NOB_ASSERT(ptr != MAP_FAILED);
+  return ptr;
+}
+
+static inline void free_jit_region(void *ptr, size_t size) {
+  NOB_ASSERT(munmap(ptr, size) == 0);
+}
+
+static inline uint8_t *get_tape_region() {
+  void *ptr = mmap(NULL, TAPE_LEN, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANON, -1, 0);
+  NOB_ASSERT(ptr != MAP_FAILED);
+  return ptr;
+}
+
+static inline void free_tape_region(void *ptr) {
+  NOB_ASSERT(munmap(ptr, TAPE_LEN) == 0);
+}
+
 typedef enum {
   Bf_R_Ok = 0,
   Bf_R_Underflow = 1,
   Bf_R_Overflow = 2,
+  Bf_R_Could_Not_Parse,
 } Bf_Result;
+
+void print_result(Bf_Result res) {
+  switch (res) {
+  case Bf_R_Ok:
+    break;
+  case Bf_R_Underflow:
+    if (TEST_OUTPUT) {
+      fprintf(stderr, "UNDERFLOW\n");
+    } else {
+      fprintf(stderr, "brainfuck encountered underflow");
+    }
+    break;
+  case Bf_R_Overflow:
+    if (TEST_OUTPUT) {
+      fprintf(stderr, "OVERFLOW\n");
+    } else {
+      fprintf(stderr, "brainfuck encountered overflow increase tape length");
+    }
+    break;
+  case Bf_R_Could_Not_Parse:
+    if (TEST_OUTPUT) {
+      fprintf(stderr, "COULD NOT PARSE\n");
+    } else {
+      fprintf(stderr, "could not parse the input file");
+    }
+  }
+}
 
 typedef enum {
   TOK_MOVE_LEFT,
@@ -202,17 +260,6 @@ typedef struct {
   size_t capacity;
 } Intermediate;
 
-void *get_jit_region(size_t size) {
-  void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-
-  if (ptr == MAP_FAILED) {
-    fprintf(stderr, "could not create memory mapping: %s\n", strerror(errno));
-    return NULL;
-  }
-  return ptr;
-}
-
 typedef struct {
   size_t *items;
   size_t count;
@@ -235,7 +282,8 @@ bool parse_bf(String_View iter, Intermediate *ir) {
 
     case TOK_JUMP_BACKWARD:
       if (idxs.count == 0) {
-        fprintf(stderr, "unexpected closing parens\n");
+        // fprintf(stderr, "unexpected closing parens\n"); TODO: parse error
+        // type
         goto error;
       }
       size_t last_idx = da_pop(&idxs);
@@ -266,7 +314,6 @@ bool parse_bf(String_View iter, Intermediate *ir) {
 
 finish:
   if (idxs.count != 0) {
-    fprintf(stderr, "unclosed opening parens\n");
     goto error;
   }
   da_free(idxs);
@@ -278,69 +325,40 @@ error:
   return false;
 }
 
-typedef struct {
-  uint8_t *items;
-  size_t count;
-  size_t capacity;
-} Tape;
-
-uint8_t tape_read(Tape *tape, size_t idx) {
-  if (idx < tape->count) {
-    return tape->items[idx];
-  } else {
-    return 0;
-  }
-}
-
-void tape_write(Tape *tape, size_t idx, uint8_t val) {
-  if (idx >= tape->count) {
-    size_t old_count = tape->count;
-    da_resize(tape, idx + 1);
-    memset(&tape->items[old_count], 0, idx + 1 - old_count);
-  }
-  tape->items[idx] = val;
-}
-
 Bf_Result ir_interpret(Intermediate *ir) {
   init_terminal();
 
   size_t instruction_ptr = 0;
   size_t tape_ptr = 0;
-  Tape tape = {0};
+  uint8_t *tape = get_tape_region();
+  Bf_Result result = Bf_R_Ok;
   while (instruction_ptr < ir->count) {
     Operation op = ir->items[instruction_ptr];
-    uint8_t tape_val = tape_read(&tape, tape_ptr);
-
-#ifdef DEBUG
-    fprintf(stderr, "instruction_ptr: %zu\n", instruction_ptr);
-    fprintf(stderr, "tape[%zu] = %d\n", tape_ptr, tape_val);
-    fprintf(stderr,
-            "instruction: Operation { op = `%s`, rep_or_jump = %zu }\n\n",
-            op_as_str(op.op), op.rep_or_jump_idx);
-#endif // DEBUG
-
+    uint8_t tape_val = tape[tape_ptr];
     switch (op.op) {
     case OP_INC:
       tape_val += op.rep_or_jump_idx;
-      tape_write(&tape, tape_ptr, tape_val);
+      tape[tape_ptr] = tape_val;
       instruction_ptr++;
       break;
     case OP_DEC:
       tape_val -= op.rep_or_jump_idx;
-      tape_write(&tape, tape_ptr, tape_val);
+      tape[tape_ptr] = tape_val;
       instruction_ptr++;
       break;
 
     case OP_MOVE_RIGHT:
       tape_ptr += op.rep_or_jump_idx;
       if (tape_ptr >= TAPE_LEN) {
-        goto overflow;
+        result = Bf_R_Overflow;
+        goto finish;
       }
       instruction_ptr++;
       break;
     case OP_MOVE_LEFT:
       if (op.rep_or_jump_idx > tape_ptr) {
-        goto underflow;
+        result = Bf_R_Underflow;
+        goto finish;
       }
       tape_ptr -= op.rep_or_jump_idx;
       instruction_ptr++;
@@ -348,7 +366,7 @@ Bf_Result ir_interpret(Intermediate *ir) {
 
     case OP_INPUT:
       for (size_t i = 0; i < op.rep_or_jump_idx; i++)
-        tape_write(&tape, tape_ptr, getchar());
+        tape[tape_ptr] = getchar();
       instruction_ptr++;
       break;
     case OP_OUTPUT:
@@ -374,17 +392,10 @@ Bf_Result ir_interpret(Intermediate *ir) {
     }
   }
 
-  da_free(tape);
+finish:
+  free_tape_region(tape);
   reset_terminal();
-  return Bf_R_Ok;
-underflow:
-  da_free(tape);
-  reset_terminal();
-  return Bf_R_Underflow;
-overflow:
-  da_free(tape);
-  reset_terminal();
-  return Bf_R_Overflow;
+  return result;
 }
 
 void append_ir(String_Builder *sb, Intermediate *ir) {
@@ -393,111 +404,6 @@ void append_ir(String_Builder *sb, Intermediate *ir) {
     sb_appendf(sb, "%0*zu: %s %*zu\n", 3, i, op_as_str(op.op), 4,
                op.rep_or_jump_idx);
   }
-}
-
-void append_freestanding_main(String_Builder *sb) {
-  sb_appendf(sb, ".global _main\n");
-  sb_appendf(sb, ".align 2\n");
-
-  sb_appendf(sb, "_main:\n");
-
-  sb_appendf(sb, "  stp fp, lr, [sp, -16]!\n");
-  sb_appendf(sb, "  mov fp, sp\n");
-
-  sb_appendf(sb, "  mov x0, %d\n", TAPE_LEN);
-  sb_appendf(sb, "  bl _malloc\n");
-  sb_appendf(sb, "  cbz x0, exit\n");
-  sb_appendf(sb, "  bl _bf_assembled\n");
-
-  sb_appendf(sb, "exit:\n");
-  sb_appendf(sb, "  ldp fp, lr, [sp], 16\n");
-  sb_appendf(sb, "  sub x0, x0, #1\n");
-  sb_appendf(sb, "  bl _exit\n");
-}
-
-// generates the function:
-// bool brainfuck_function(void *tape_ptr)
-void translate_to_asm(String_Builder *sb, Intermediate *ir) {
-  // Prelude
-  sb_appendf(sb, ".globl _bf_assembled\n");
-  sb_appendf(sb, "_bf_assembled:\n");
-  sb_appendf(sb, "  sub sp, sp, 32\n");
-  sb_appendf(sb, "  stp x29, x30, [sp, 16]\n");
-  sb_appendf(sb, "  stp %s, %s, [sp]\n", BASE_REG_STR, INDEX_REG_STR);
-  sb_appendf(sb, "  mov x29, sp\n");
-  sb_appendf(sb, "  mov %s, x0\n", BASE_REG_STR);
-  sb_appendf(sb, "  mov %s, xzr\n", INDEX_REG_STR);
-  for (size_t i = 0; i < ir->count; i++) {
-    Operation op = ir->items[i];
-    switch (op.op) {
-    case OP_MOVE_RIGHT:
-      // sb_appendf(sb, "  brk #0xf000\n");
-      sb_appendf(sb, "  add %s, %s, %zu\n", INDEX_REG_STR, INDEX_REG_STR,
-                 op.rep_or_jump_idx);
-      sb_appendf(sb, "  cmp %s, %d\n", INDEX_REG_STR, TAPE_LEN);
-      sb_appendf(sb, "  b.hs bf_overflow\n");
-      break;
-    case OP_MOVE_LEFT:
-      // sb_appendf(sb, "  brk #0xf000\n");
-      sb_appendf(sb, "  subs %s, %s, %zu\n", INDEX_REG_STR, INDEX_REG_STR,
-                 op.rep_or_jump_idx);
-      sb_appendf(sb, "  b.lo bf_underflow\n");
-      break;
-
-    case OP_INC:
-      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
-      sb_appendf(sb, "  add w1, w0, %zu\n", op.rep_or_jump_idx % 256);
-      sb_appendf(sb, "  strb w1, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
-      break;
-    case OP_DEC:
-      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
-      sb_appendf(sb, "  add w1, w0, %zu\n", 256 - (op.rep_or_jump_idx % 256));
-      sb_appendf(sb, "  strb w1, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
-      break;
-
-    case OP_OUTPUT:
-      for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
-        sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
-        sb_appendf(sb, "  bl _putchar\n");
-      }
-      break;
-    case OP_INPUT:
-      TODO("input not yet valid we need to set up the terminal for this");
-      for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
-        sb_appendf(sb, "  bl _getchar\n");
-      }
-      sb_appendf(sb, "  strb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
-      break;
-
-    case OP_JUMP_FOREWARD:
-      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
-      sb_appendf(sb, "  cbz w0, label_f_%zu\n", op.rep_or_jump_idx);
-      sb_appendf(sb, "label_b_%zu:\n", i);
-      break;
-    case OP_JUMP_BACKWARD:
-      sb_appendf(sb, "  ldrb w0, [%s, %s]\n", BASE_REG_STR, INDEX_REG_STR);
-      sb_appendf(sb, "  cbnz w0, label_b_%zu\n", op.rep_or_jump_idx);
-      sb_appendf(sb, "label_f_%zu:\n", i);
-      break;
-    }
-  }
-
-  // Postlude return success
-  sb_appendf(sb, "  mov x0, %u\n", Bf_R_Ok);
-  // Postlude
-  sb_appendf(sb, "bf_postlude:\n");
-  sb_appendf(sb, "  ldp x29, x30, [sp, 16]\n");
-  sb_appendf(sb, "  ldp %s, %s, [sp]\n", BASE_REG_STR, INDEX_REG_STR);
-  sb_appendf(sb, "  add sp, sp, 32\n");
-  sb_appendf(sb, "  ret\n");
-
-  sb_appendf(sb, "bf_underflow:\n");
-  sb_appendf(sb, "  mov x0, %u\n", Bf_R_Underflow);
-  sb_appendf(sb, "  b bf_postlude\n");
-
-  sb_appendf(sb, "bf_overflow:\n");
-  sb_appendf(sb, "  mov x0, %u\n", Bf_R_Overflow);
-  sb_appendf(sb, "  b bf_postlude\n");
 }
 
 typedef uint32_t instr;
@@ -759,97 +665,152 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
   da_free(branch_list);
 }
 
-int main(int argc, char **argv) {
+Bf_Result run_on_jit(Instructions *code) {
+  void *code_ptr = get_jit_region(code->count * sizeof(code->items[0]));
+
+  pthread_jit_write_protect_np(0);
+  memcpy(code_ptr, code->items, code->count * sizeof(code->items[0]));
+  pthread_jit_write_protect_np(1);
+  sys_icache_invalidate(code_ptr, code->count * sizeof(code->items[0]));
+
+  uint8_t *tape_ptr = get_tape_region();
+
+  Bf_Result res = ((jit_fn_type)code_ptr)(tape_ptr, putchar, getchar);
+  free_tape_region(tape_ptr);
+  free_jit_region(code_ptr, code->count * sizeof(code->items[0]));
+
+  return res;
+}
+void print_usage(char *pname) {
+  fprintf(stderr, "Usage %s FLAGS <filename.bf>\n", pname);
+  fprintf(stderr, "   --interprete-ir  -i     interpret ir directly\n");
+  fprintf(stderr, "   --stats          -s     print statistics\n");
+  fprintf(stderr, "   --tape-len       -t     set lenght of tape (multiples of "
+                  "2^12 = 4'096)\n");
+  fprintf(stderr,
+          "   --emit-ir        -e     emit intermediate representation\n");
+  fprintf(stderr, "   --test-output           output for tests\n");
+}
+
+bool parse_size(char *s, size_t *num) {
+  char *endptr;
+  errno = 0;
+
+  unsigned long val = strtoul(s, &endptr, 10);
+
+  if ((errno == ERANGE && (val == ULONG_MAX)) || (errno != 0 && val == 0)) {
+    return false;
+  }
+  if (endptr == s) {
+    return false;
+  }
+  if (*endptr != '\0') {
+    return false;
+  }
+
+  *num = (size_t)val;
+  return true;
+}
+
+char *parse_args(int argc, char **argv) {
   char *p_name = *argv;
   shift(argv, argc);
 
-  if (argc == 0 | argc > 1) {
-    fprintf(stderr, "Usage %s <filename.bf>\n", p_name);
-    return -1;
+  while (argc > 0) {
+    char *arg = *argv;
+    if (!(arg[0] == '-')) {
+      break;
+    }
+    if (strcmp(arg, "--test-output") == 0) {
+      TEST_OUTPUT = true;
+    } else if (strcmp(arg, "-i") == 0 || strcmp(arg, "--interprete-ir") == 0) {
+      RUN_JIT = false;
+      RUN_IR = true;
+    } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--stats") == 0) {
+      STATS = true;
+    } else if (strcmp(arg, "-e") == 0 || strcmp(arg, "--emit-ir") == 0) {
+      EMIT_IR = true;
+    } else if (strcmp(arg, "-t") == 0 || strcmp(arg, "--tape-len") == 0) {
+      shift(argv, argc);
+      size_t len = 0;
+      if (!parse_size(*argv, &len)) {
+        fprintf(stderr, "could not parse --tape-len/-t argument\n");
+      }
+      if ((len % 1 << 12) != 0) {
+        fprintf(stderr, "provided tape len %zu is not divisibel by 2^12\n",
+                len);
+        len = ((len + MIN_TAPE_LEN - 1) / MIN_TAPE_LEN) * MIN_TAPE_LEN;
+        fprintf(stderr, "rounded to %zu\n", len);
+      }
+      if (len == 0) {
+        fprintf(stderr, "provided tape len 0 is invalid\n");
+        exit(-1);
+      }
+      TAPE_LEN = len;
+    } else {
+      fprintf(stderr, "unrecognized option `%s`\n", *argv);
+      print_usage(p_name);
+      exit(-1);
+    }
+
+    shift(argv, argc);
   }
 
-  String_Builder contents = {0};
-  if (!read_entire_file(*argv, &contents)) {
+  if (argc != 1) {
+    fprintf(stderr, "could not parse args\n");
+    fprintf(stderr, "provide flags before single file\n");
+    print_usage(p_name);
+    exit(-1);
+  }
+  return *argv;
+}
+
+int main(int argc, char **argv) {
+  char *file_name = parse_args(argc, argv);
+  if (!file_exists(file_name)) {
     fprintf(stderr, "could not find file %s\n", *argv);
+  }
+  String_Builder contents = {0};
+  if (!read_entire_file(file_name, &contents)) {
+    fprintf(stderr, "could not read file %s\n", *argv);
     return -1;
   }
 
   Intermediate ir = {0};
 
-  if (!parse_bf(sb_to_sv(contents), &ir))
+  if (!parse_bf(sb_to_sv(contents), &ir)) {
+    print_result(Bf_R_Could_Not_Parse);
     return -1;
-
-  // String_Builder asm_buf = {0};
-  // append_freestanding_main(&asm_buf);
-  // translate_to_asm(&asm_buf, &ir);
-  // sb_append_null(&asm_buf);
-  //
-  // char *asm_file = "bf-main.s";
-  // FILE *file = fopen(asm_file, "w");
-  // if (file == NULL) {
-  //   fprintf(stderr, "could not open %s\n", asm_file);
-  // }
-  // fprintf(file, "%s", asm_buf.items);
-  // fclose(file);
-  //
-  // Cmd cmd = {0};
-  // cmd_append(&cmd, "clang", "-arch", "arm64", "-c", "-o", "bf-main.o",
-  //            "bf-main.s");
-  // if (!cmd_run(&cmd)) {
-  //   fprintf(stderr, "could not compile to object\n");
-  //   return -1;
-  // }
-  // cmd_append(&cmd, "clang", "-arch", "arm64", "-o", "bf-main", "bf-main.o");
-  // if (!cmd_run(&cmd)) {
-  //   fprintf(stderr, "could not compile to executable\n");
-  //   return -1;
-  // }
-
-  Instructions code = {0};
-  translate_to_code(&code, &ir);
-
-  void *code_ptr = get_jit_region(code.count * sizeof(code.items[0]));
-
-  if (code_ptr == NULL) {
-    fprintf(stderr, "could not allocate jit memory region\n");
-    return 0;
   }
 
-  pthread_jit_write_protect_np(0);
-  memcpy(code_ptr, code.items, code.count * sizeof(code.items[0]));
-  pthread_jit_write_protect_np(1);
-  sys_icache_invalidate(code_ptr, code.count * sizeof(code.items[0]));
-
-  jit_fn_type jit_func = (jit_fn_type)code_ptr;
-
-  uint8_t *tape_ptr = malloc(TAPE_LEN);
-  if (tape_ptr == NULL) {
-    fprintf(stderr, "could not allocate tape memory region\n");
-    return 0;
+  if (STATS) {
+    fprintf(stderr, "Intermediate Representation\n");
+    fprintf(stderr, "  %zu instructions\n", ir.count);
   }
-  memset(tape_ptr, 0, TAPE_LEN);
 
-  switch (jit_func(tape_ptr, putchar, getchar)) {
-  case Bf_R_Ok:
-    break;
-  case Bf_R_Underflow:
-    fprintf(stderr, "UNDERFLOW\n");
-    break;
-  case Bf_R_Overflow:
-    fprintf(stderr, "OVERFLOW\n");
-    break;
+  if (EMIT_IR) {
+    String_Builder ir_str = {0};
+    append_ir(&ir_str, &ir);
+    sb_append_null(&ir_str);
+    fprintf(stderr, "%s", ir_str.items);
   }
-  return 0;
 
-  switch (ir_interpret(&ir)) {
-  case Bf_R_Ok:
-    break;
-  case Bf_R_Underflow:
-    fprintf(stderr, "UNDERFLOW\n");
-    break;
-  case Bf_R_Overflow:
-    fprintf(stderr, "OVERFLOW\n");
-    break;
+  if (RUN_JIT) {
+    Instructions code = {0};
+    translate_to_code(&code, &ir);
+    Bf_Result res = run_on_jit(&code);
+    if (res != Bf_R_Ok) {
+      print_result(res);
+      return -1;
+    }
+  }
+
+  if (RUN_IR) {
+    Bf_Result res = ir_interpret(&ir);
+    if (res != Bf_R_Ok) {
+      print_result(res);
+      return -1;
+    }
   }
 
   return 0;
