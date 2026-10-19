@@ -2,7 +2,7 @@
 
 This repo contains the code for a brainfuck interpreter.
 
-## How to run
+## How to build
 
 Only a C compiler is necessary to run this code.
 
@@ -11,6 +11,17 @@ To bootstrap `nob` run `cc -o nob nob.c`.
 Build the project using `./nob`, this also rebuilds `nob` if necessary.
 
 Run tests with `./nob test`
+
+## Usage
+
+```
+Usage bf-jit FLAGS <filename.bf>
+   --interprete-ir  -i     interpret ir directly
+   --stats          -s     print statistics
+   --tape-len       -t     set lenght of tape (multiples of 2^12 = 4'096)
+   --emit-ir        -e     emit intermediate representation
+   --test-output           output for tests
+```
 
 
 ## Intermediate representation
