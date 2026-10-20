@@ -1,6 +1,4 @@
 #include <errno.h>
-#include <libkern/OSCacheControl.h>
-#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -11,17 +9,21 @@
 #include <termios.h>
 #include <time.h>
 
+#if defined(__APPLE__)
+#include <libkern/OSCacheControl.h>
+#include <pthread.h>
+#else  // defined(__APPLE__)
+#endif // defined(__APPLE__)
+
 #define NOB_STRIP_PREFIX
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
-// #define DEBUG
-
 #if defined(__APPLE__)
 #define SYM(x) "_" #x // Mach-O prepends an underscore
-#else
+#else                 // defined(__APPLE__)
 #define SYM(x) #x
-#endif
+#endif // defined(__APPLE__)
 
 #define ENCODE_ASM(text, startptr, endptr)                                     \
   __asm__(".text\n"                                                            \
@@ -73,6 +75,7 @@ static bool STATS = false;
 static bool EMIT_IR = false;
 static size_t TAPE_LEN = 1024 * 4;
 
+#if defined(__APPLE__)
 static inline void *get_jit_region(size_t size) {
   void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
@@ -80,15 +83,30 @@ static inline void *get_jit_region(size_t size) {
   return ptr;
 }
 
-static inline void free_jit_region(void *ptr, size_t size) {
-  NOB_ASSERT(munmap(ptr, size) == 0);
-}
-
 static inline uint8_t *get_tape_region() {
   void *ptr = mmap(NULL, TAPE_LEN, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANON, -1, 0);
   NOB_ASSERT(ptr != MAP_FAILED);
   return ptr;
+}
+#else  // defined(__APPLE__)
+static inline void *get_jit_region(size_t size) {
+  void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  NOB_ASSERT(ptr != MAP_FAILED);
+  return ptr;
+}
+
+static inline uint8_t *get_tape_region(void) {
+  void *ptr = mmap(NULL, TAPE_LEN, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  NOB_ASSERT(ptr != MAP_FAILED);
+  return ptr;
+}
+#endif // defined(__APPLE__)
+
+static inline void free_jit_region(void *ptr, size_t size) {
+  NOB_ASSERT(munmap(ptr, size) == 0);
 }
 
 static inline void free_tape_region(void *ptr) {
@@ -225,6 +243,8 @@ OpCode token_as_op_code(Token t) {
     UNREACHABLE("TOK_START is no Operation");
   case TOK_END:
     UNREACHABLE("TOK_END is no Operation");
+  default:
+    UNREACHABLE("");
   }
 }
 
@@ -413,7 +433,7 @@ typedef uint32_t instr;
 
 instr add_idx(size_t n) {
   // [sf=1]00100010[sh=0][imm12][xindx5][xindx5]
-  if (n < (1 << 12)) {
+  if (n >= (1 << 12)) {
     TODO("allow the use of larger add using lsl 12");
   }
   instr out = ENCODE_INSTR("add " INDEX_REG_STR ", " INDEX_REG_STR ", 0");
@@ -423,8 +443,8 @@ instr add_idx(size_t n) {
 
 instr sub_idx_with_flag(size_t n) {
   // [sf=1]11100010[sh=0][imm12][xindx5][xindx5]
-  if (n < (1 << 12)) {
-    TODO("allow the use of larger add using lsl 12");
+  if (n >= (1 << 12)) {
+    TODO("allow the use of larger sub using lsl 12");
   }
   instr out = ENCODE_INSTR("subs " INDEX_REG_STR ", " INDEX_REG_STR ", 0");
   out |= n << 10;
@@ -672,10 +692,14 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
 Bf_Result run_on_jit(Instructions *code) {
   void *code_ptr = get_jit_region(code->count * sizeof(code->items[0]));
 
+#if defined(__APPLE__)
   pthread_jit_write_protect_np(0);
+#endif // defined(__APPLE__)
   memcpy(code_ptr, code->items, code->count * sizeof(code->items[0]));
+#if defined(__APPLE__)
   pthread_jit_write_protect_np(1);
   sys_icache_invalidate(code_ptr, code->count * sizeof(code->items[0]));
+#endif // defined(__APPLE__)
 
   uint8_t *tape_ptr = get_tape_region();
 

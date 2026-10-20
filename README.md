@@ -1,6 +1,7 @@
-# Brainfuck interpreter & compiler
+# Brainfuck Interpreter & JIT Compiler
 
 This repo contains the code for a brainfuck interpreter.
+It works on MacOs and Linux.
 
 ## How to build
 

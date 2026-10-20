@@ -4,7 +4,6 @@
 #include "nob.h"
 
 #define BIN_PATH "./bf-jit"
-#define CC "clang"
 
 #define TEST_PATH "tests"
 
@@ -126,7 +125,7 @@ int main(int argc, char **argv) {
     shift(argv, argc);
   }
 
-  cmd_append(&CMD, CC, "-Wall", "-Wextra", "-Werror", "-o", BIN_PATH, "-O3",
+  cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Werror", "-o", BIN_PATH, "-O3",
              "main.c");
   if (!cmd_run(&CMD))
     return 1;
