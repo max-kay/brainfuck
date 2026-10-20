@@ -57,7 +57,7 @@
 
 static struct termios orig_termios;
 
-void init_terminal(void) {
+static inline void init_terminal(void) {
   struct termios raw;
   tcgetattr(STDIN_FILENO, &orig_termios);
   raw = orig_termios;
@@ -65,7 +65,9 @@ void init_terminal(void) {
   tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 }
 
-void reset_terminal(void) { tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios); }
+static inline void reset_terminal(void) {
+  tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
+}
 
 // COMMANDLINE CONFIG
 static bool TEST_OUTPUT = false;
@@ -160,33 +162,6 @@ typedef enum {
   TOK_END,
 } Token;
 
-char *token_as_str(Token t) {
-  switch (t) {
-  case TOK_MOVE_LEFT:
-    return "MOVE_LEFT";
-  case TOK_MOVE_RIGHT:
-    return "MOVE_RIGHT";
-  case TOK_INC:
-    return "INC";
-  case TOK_DEC:
-    return "DEC";
-  case TOK_OUTPUT:
-    return "OUTPUT";
-  case TOK_INPUT:
-    return "INPUT";
-  case TOK_JUMP_FORWARD:
-    return "JUMP_FORWARD";
-  case TOK_JUMP_BACKWARD:
-    return "JUMP_BACKWARD";
-  case TOK_START:
-    return "START";
-  case TOK_END:
-    return "END";
-  default:
-    UNREACHABLE("");
-  }
-}
-
 typedef enum {
   OP_MOVE_LEFT,
   OP_MOVE_RIGHT,
@@ -198,7 +173,7 @@ typedef enum {
   OP_JUMP_BACKWARD,
 } OpCode;
 
-char *op_as_str(OpCode t) {
+static inline char *op_as_str(OpCode t) {
   switch (t) {
   case OP_MOVE_LEFT:
     return "L";
@@ -221,7 +196,7 @@ char *op_as_str(OpCode t) {
   }
 }
 
-OpCode token_as_op_code(Token t) {
+static inline OpCode token_as_op_code(Token t) {
   switch (t) {
   case TOK_MOVE_LEFT:
     return OP_MOVE_LEFT;
@@ -431,7 +406,7 @@ void append_ir(String_Builder *sb, Intermediate *ir) {
 
 typedef uint32_t instr;
 
-instr add_idx(size_t n) {
+static inline instr add_idx(size_t n) {
   // [sf=1]00100010[sh=0][imm12][xindx5][xindx5]
   if (n >= (1 << 12)) {
     TODO("allow the use of larger add using lsl 12");
@@ -441,7 +416,7 @@ instr add_idx(size_t n) {
   return out;
 }
 
-instr sub_idx_with_flag(size_t n) {
+static inline instr sub_idx_with_flag(size_t n) {
   // [sf=1]11100010[sh=0][imm12][xindx5][xindx5]
   if (n >= (1 << 12)) {
     TODO("allow the use of larger sub using lsl 12");
@@ -451,7 +426,7 @@ instr sub_idx_with_flag(size_t n) {
   return out;
 }
 
-instr add(uint8_t dst, uint8_t src, size_t n) {
+static inline instr add(uint8_t dst, uint8_t src, size_t n) {
   // [sf=0]00100010[sh=0][imm12][src5][dst5]
   NOB_ASSERT(n < 1 << 12);
   NOB_ASSERT(src < 8);
@@ -463,16 +438,16 @@ instr add(uint8_t dst, uint8_t src, size_t n) {
   return out;
 }
 
-instr mask(uint8_t dst, uint8_t src) {
-  instr out = ENCODE_INSTR("and w0, w0, 0xFF");
-  NOB_ASSERT(src < 8);
-  NOB_ASSERT(dst < 8);
-  out |= dst;
-  out |= src << 5;
-  return out;
-}
+// static inline instr mask(uint8_t dst, uint8_t src) {
+//   instr out = ENCODE_INSTR("and w0, w0, 0xFF");
+//   NOB_ASSERT(src < 8);
+//   NOB_ASSERT(dst < 8);
+//   out |= dst;
+//   out |= src << 5;
+//   return out;
+// }
 
-instr cmp_idx() {
+static inline instr cmp_idx() {
   // [sf=1]11100010[sh=1][imm12][xindx5][xzr5=11111]
   NOB_ASSERT((TAPE_LEN & ((1 << 12) - 1)) == 0);
   size_t shifted = TAPE_LEN >> 12;
@@ -482,11 +457,11 @@ instr cmp_idx() {
   return out;
 }
 
-instr bhs() { return ENCODE_INSTR("b.hs 0"); }
+static inline instr bhs() { return ENCODE_INSTR("b.hs 0"); }
 
-instr blo() { return ENCODE_INSTR("b.lo 0"); }
+static inline instr blo() { return ENCODE_INSTR("b.lo 0"); }
 
-instr cbz(uint8_t reg) {
+static inline instr cbz(uint8_t reg) {
   // [sf=0]0110100[imm19][reg5]
   NOB_ASSERT(reg < 8);
   instr out = ENCODE_INSTR("cbz w0, 0");
@@ -494,7 +469,7 @@ instr cbz(uint8_t reg) {
   return out;
 }
 
-instr cbnz(uint8_t reg) {
+static inline instr cbnz(uint8_t reg) {
   // [sf=0]0110101[imm19][reg5]
   NOB_ASSERT(reg < 8);
   instr out = ENCODE_INSTR("cbnz w0, 0");
@@ -502,18 +477,18 @@ instr cbnz(uint8_t reg) {
   return out;
 }
 
-void link_cond_branch(instr *op, ptrdiff_t offset) {
+static inline void link_cond_branch(instr *op, ptrdiff_t offset) {
   // offset is 4 times bytelen or instruction count
   NOB_ASSERT(offset >= -(1 << 18) && offset < (1 << 18));
   *op |= ((uint32_t)offset & 0x7FFFF) << 5;
 }
 
-void link_uncond_branch(instr *op, ptrdiff_t offset) {
+static inline void link_uncond_branch(instr *op, ptrdiff_t offset) {
   NOB_ASSERT(offset >= -(1 << 26) && offset < (1 << 26));
   *op |= ((uint32_t)offset & ((1 << 26) - 1));
 }
 
-instr ld_tape(uint8_t reg) {
+static inline instr ld_tape(uint8_t reg) {
   // 00111000011[xindx5][option3=011][S=0]10[xbase5][reg5]
   NOB_ASSERT(reg < 8);
   instr out = ENCODE_INSTR("ldrb w0, [" BASE_REG_STR ", " INDEX_REG_STR "]");
@@ -521,7 +496,7 @@ instr ld_tape(uint8_t reg) {
   return out;
 }
 
-instr str_tape(uint8_t reg) {
+static inline instr str_tape(uint8_t reg) {
   // 00111000001[xindx5][option3=011][S=0]10[xbase5][reg5]
   NOB_ASSERT(reg < 8);
   instr out = ENCODE_INSTR("strb w0, [" BASE_REG_STR ", " INDEX_REG_STR "]");
@@ -529,9 +504,9 @@ instr str_tape(uint8_t reg) {
   return out;
 }
 
-instr blr_putc() { return ENCODE_INSTR("blr " PUTC_REG_STR); }
+static inline instr blr_putc() { return ENCODE_INSTR("blr " PUTC_REG_STR); }
 
-instr blr_getc() { return ENCODE_INSTR("blr " GETC_REG_STR); }
+static inline instr blr_getc() { return ENCODE_INSTR("blr " GETC_REG_STR); }
 
 typedef struct {
   instr *items;
