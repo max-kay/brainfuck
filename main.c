@@ -136,7 +136,7 @@ typedef enum {
   TOK_DEC,
   TOK_OUTPUT,
   TOK_INPUT,
-  TOK_JUMP_FOREWARD,
+  TOK_JUMP_FORWARD,
   TOK_JUMP_BACKWARD,
   TOK_START,
   TOK_END,
@@ -156,14 +156,16 @@ char *token_as_str(Token t) {
     return "OUTPUT";
   case TOK_INPUT:
     return "INPUT";
-  case TOK_JUMP_FOREWARD:
-    return "JUMP_FOREWARD";
+  case TOK_JUMP_FORWARD:
+    return "JUMP_FORWARD";
   case TOK_JUMP_BACKWARD:
     return "JUMP_BACKWARD";
   case TOK_START:
     return "START";
   case TOK_END:
     return "END";
+  default:
+    UNREACHABLE("");
   }
 }
 
@@ -174,7 +176,7 @@ typedef enum {
   OP_DEC,
   OP_OUTPUT,
   OP_INPUT,
-  OP_JUMP_FOREWARD,
+  OP_JUMP_FORWARD,
   OP_JUMP_BACKWARD,
 } OpCode;
 
@@ -192,10 +194,12 @@ char *op_as_str(OpCode t) {
     return "O";
   case OP_INPUT:
     return "I";
-  case OP_JUMP_FOREWARD:
+  case OP_JUMP_FORWARD:
     return "F";
   case OP_JUMP_BACKWARD:
     return "B";
+  default:
+    UNREACHABLE("");
   }
 }
 
@@ -213,8 +217,8 @@ OpCode token_as_op_code(Token t) {
     return OP_OUTPUT;
   case TOK_INPUT:
     return OP_INPUT;
-  case TOK_JUMP_FOREWARD:
-    return OP_JUMP_FOREWARD;
+  case TOK_JUMP_FORWARD:
+    return OP_JUMP_FORWARD;
   case TOK_JUMP_BACKWARD:
     return OP_JUMP_BACKWARD;
   case TOK_START:
@@ -240,7 +244,7 @@ Token get_next(String_View *sv) {
     case ',':
       return TOK_INPUT;
     case '[':
-      return TOK_JUMP_FOREWARD;
+      return TOK_JUMP_FORWARD;
     case ']':
       return TOK_JUMP_BACKWARD;
     default:
@@ -275,9 +279,9 @@ bool parse_bf(String_View iter, Intermediate *ir) {
     Token token = get_next(&iter);
     Operation current_op = {0};
     switch (token) {
-    case TOK_JUMP_FOREWARD:
+    case TOK_JUMP_FORWARD:
       da_append(&idxs, ir->count);
-      current_op = (Operation){.op = OP_JUMP_FOREWARD, .rep_or_jump_idx = 0};
+      current_op = (Operation){.op = OP_JUMP_FORWARD, .rep_or_jump_idx = 0};
       da_append(ir, current_op);
       break;
 
@@ -374,7 +378,7 @@ Bf_Result ir_interpret(Intermediate *ir) {
       instruction_ptr++;
       break;
 
-    case OP_JUMP_FOREWARD:
+    case OP_JUMP_FORWARD:
       if (tape_val == 0) {
         instruction_ptr = op.rep_or_jump_idx + 1;
       } else {
@@ -409,7 +413,9 @@ typedef uint32_t instr;
 
 instr add_idx(size_t n) {
   // [sf=1]00100010[sh=0][imm12][xindx5][xindx5]
-  NOB_ASSERT(n < 1 << 12);
+  if (n < (1 << 12)) {
+    TODO("allow the use of larger add using lsl 12");
+  }
   instr out = ENCODE_INSTR("add " INDEX_REG_STR ", " INDEX_REG_STR ", 0");
   out |= n << 10;
   return out;
@@ -417,7 +423,9 @@ instr add_idx(size_t n) {
 
 instr sub_idx_with_flag(size_t n) {
   // [sf=1]11100010[sh=0][imm12][xindx5][xindx5]
-  NOB_ASSERT(n < 1 << 12);
+  if (n < (1 << 12)) {
+    TODO("allow the use of larger add using lsl 12");
+  }
   instr out = ENCODE_INSTR("subs " INDEX_REG_STR ", " INDEX_REG_STR ", 0");
   out |= n << 10;
   return out;
@@ -534,7 +542,7 @@ ENCODE_ASM("  ldp x29, x30, [sp, 32]\n"
            POSTLUDE_START, POSTLUDE_END);
 
 typedef struct {
-  size_t foreward_irop_idx, backward_irop_idx, start_b_index;
+  size_t forward_irop_idx, backward_irop_idx, start_b_index;
 } BranchEntry;
 
 typedef struct {
@@ -545,7 +553,7 @@ typedef struct {
 
 size_t jl_find(BranchList *jl, size_t ir_op_idx) {
   for (size_t i = 0; i < jl->count; i++) {
-    if (jl->items[i].foreward_irop_idx == ir_op_idx) {
+    if (jl->items[i].forward_irop_idx == ir_op_idx) {
       return i;
     }
   }
@@ -597,11 +605,11 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
       da_append(code, str_tape(0));
       break;
 
-    case OP_JUMP_FOREWARD:
+    case OP_JUMP_FORWARD:
       da_append(code, ld_tape(0));
       da_append(code, cbz(0));
       BranchEntry pair = {
-          .foreward_irop_idx = i,
+          .forward_irop_idx = i,
           .backward_irop_idx = op.rep_or_jump_idx,
           .start_b_index = code->count - 1,
       };
@@ -614,8 +622,7 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
 
       size_t idx = jl_find(&branch_list, op.rep_or_jump_idx);
       NOB_ASSERT(idx != SIZE_MAX);
-      NOB_ASSERT(branch_list.items[idx].foreward_irop_idx ==
-                 op.rep_or_jump_idx);
+      NOB_ASSERT(branch_list.items[idx].forward_irop_idx == op.rep_or_jump_idx);
 
       ptrdiff_t lower_b_idx = branch_list.items[idx].start_b_index;
 
@@ -680,9 +687,9 @@ Bf_Result run_on_jit(Instructions *code) {
 }
 void print_usage(char *pname) {
   fprintf(stderr, "Usage %s FLAGS <filename.bf>\n", pname);
-  fprintf(stderr, "   --interprete-ir  -i     interpret ir directly\n");
+  fprintf(stderr, "   --interpret-ir  -i     interpret ir directly\n");
   fprintf(stderr, "   --stats          -s     print statistics\n");
-  fprintf(stderr, "   --tape-len       -t     set lenght of tape (multiples of "
+  fprintf(stderr, "   --tape-len       -t     set length of tape (multiples of "
                   "2^12 = 4'096)\n");
   fprintf(stderr,
           "   --emit-ir        -e     emit intermediate representation\n");
@@ -720,7 +727,7 @@ char *parse_args(int argc, char **argv) {
     }
     if (strcmp(arg, "--test-output") == 0) {
       TEST_OUTPUT = true;
-    } else if (strcmp(arg, "-i") == 0 || strcmp(arg, "--interprete-ir") == 0) {
+    } else if (strcmp(arg, "-i") == 0 || strcmp(arg, "--interpret-ir") == 0) {
       RUN_JIT = false;
       RUN_IR = true;
     } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--stats") == 0) {
@@ -730,7 +737,7 @@ char *parse_args(int argc, char **argv) {
     } else if (strcmp(arg, "-t") == 0 || strcmp(arg, "--tape-len") == 0) {
       shift(argv, argc);
       size_t len = 0;
-      if (!parse_size(*argv, &len)) {
+      if (argc == 0 || !parse_size(*argv, &len)) {
         fprintf(stderr, "could not parse --tape-len/-t argument\n");
         exit(-1);
       }
@@ -766,7 +773,7 @@ char *parse_args(int argc, char **argv) {
 void pprint_clock(clock_t elapsed) {
   if (elapsed >= 60 * CLOCKS_PER_SEC) {
     size_t mins = elapsed / (60 * CLOCKS_PER_SEC);
-    size_t secs = (elapsed - mins) / CLOCKS_PER_SEC;
+    size_t secs = (elapsed - mins * (60 * CLOCKS_PER_SEC)) / CLOCKS_PER_SEC;
     fprintf(stderr, "%zu min %zu s", mins, secs);
     return;
   }
@@ -785,6 +792,7 @@ int main(int argc, char **argv) {
   char *file_name = parse_args(argc, argv);
   if (!file_exists(file_name)) {
     fprintf(stderr, "could not find file %s\n", *argv);
+    return -1;
   }
   String_Builder contents = {0};
   if (!read_entire_file(file_name, &contents)) {

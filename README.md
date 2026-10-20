@@ -29,7 +29,7 @@ Usage bf-jit FLAGS <filename.bf>
 The brainfuck code is first translated into an intermediate representation with the follwing op codes:
 
 - (`A`, n) *a*dd n to the value at tape index
-- (`S`, n) *s*tract n from the value at tape index
+- (`S`, n) *s*ubtract n from the value at tape index
 - (`R`, n) move *r*ight by n and halt execution on overflow
 - (`L`, n) move *l*eft by n and halt execution on underflow
 - (`F`, a) jump *f*oreward to instruction a+1 if the value at the tape index is zero
@@ -41,7 +41,7 @@ The brainfuck code is first translated into an intermediate representation with 
 
 The assembly for the one brainfuck file is translated to a single function:
 `bool bf_assembled(void *tape_base);`
-The return value specifies if the function exited normaly (`true`) or if an out of bounds error occured (`false`).
+The return value specifies if the function exited normaly (`true`) or if an out of bounds error occurred (`false`).
 
 One register holds the tape base pointer (`xbase`) and one holds the tape index (`xindx`) throughout the whole program.
 
