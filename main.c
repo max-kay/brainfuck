@@ -716,7 +716,7 @@ Bf_Result run_on_jit(Instructions *code) {
 }
 void print_usage(char *pname) {
   fprintf(stderr, "Usage %s FLAGS <filename.bf>\n", pname);
-  fprintf(stderr, "   --interpret-ir  -i     interpret ir directly\n");
+  fprintf(stderr, "   --interpret-ir   -i     interpret ir directly\n");
   fprintf(stderr, "   --stats          -s     print statistics\n");
   fprintf(stderr, "   --tape-len       -t     set length of tape (multiples of "
                   "2^12 = 4'096)\n");
@@ -749,6 +749,10 @@ char *parse_args(int argc, char **argv) {
   char *p_name = *argv;
   shift(argv, argc);
 
+  if (argc == 0) {
+    print_usage(p_name);
+    exit(-1);
+  }
   while (argc > 0) {
     char *arg = *argv;
     if (!(arg[0] == '-')) {
@@ -819,13 +823,14 @@ void pprint_clock(clock_t elapsed) {
 
 int main(int argc, char **argv) {
   char *file_name = parse_args(argc, argv);
+
   if (!file_exists(file_name)) {
-    fprintf(stderr, "could not find file %s\n", *argv);
+    fprintf(stderr, "could not find file %s\n", file_name);
     return -1;
   }
   String_Builder contents = {0};
   if (!read_entire_file(file_name, &contents)) {
-    fprintf(stderr, "could not read file %s\n", *argv);
+    fprintf(stderr, "could not read file %s\n", file_name);
     return -1;
   }
 
