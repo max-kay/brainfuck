@@ -17,9 +17,9 @@ Run tests with `./nob test`
 
 ```
 Usage bf-jit FLAGS <filename.bf>
-   --interprete-ir  -i     interpret ir directly
+   --interpret-ir   -i     interpret ir directly
    --stats          -s     print statistics
-   --tape-len       -t     set lenght of tape (multiples of 2^12 = 4'096)
+   --tape-len       -t     set length of tape (multiples of 2^12 = 4'096)
    --emit-ir        -e     emit intermediate representation
    --test-output           output for tests
 ```
