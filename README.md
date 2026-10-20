@@ -41,52 +41,46 @@ The brainfuck code is first translated into an intermediate representation with 
 ## Translation to assembly
 
 The assembly for the one brainfuck file is translated to a single function:
-`bool bf_assembled(void *tape_base);`
+`Bf_Result bf_assembled(void *tape_base, int *putchar(int), int *getchar(void));`
 The return value specifies if the function exited normaly (`true`) or if an out of bounds error occurred (`false`).
 
 One register holds the tape base pointer (`xbase`) and one holds the tape index (`xindx`) throughout the whole program.
 
-Since x19 to x28 are callee preserved registers, `xbase` and `xindx` will use one of those registers.
+Since x19 to x20 are callee preserved registers, `xbase` and `xindx` will use one of those registers.
 Like this they never need to be preserved.
+
+To call `getchar` and `putchar` the function pointers are passed to the function.
+Simmilar to `xbase` and `xindx` callee preserved registers (`xgetc` and `xputc`) are used for them.
 
 ### Prelude
 ```asm
-.globl _bf_assembled
-_bf_assembled:
-  sub sp, sp, 32
-  stp x29, x30, [sp, 16]
-  stp xbase, xindx, [sp]
+  sub sp, sp, 48
+  stp x29, x30, [sp, 32]
   mov x29, sp
-  mov xbase, x0
+  stp xindx, xbase , [sp, 16]
+  stp xgetc, xputc, [sp]
   mov xindx, xzr
+  mov xbase, x0
+  mov xputc, x1
+  mov xgetc, x2
 ```
 
 ### Postlude
 ```asm
-  mov x0, 1
+  mov x0, 0 ; Bf_R_Ok
+
 bf_postlude:
-  ldp x29, x30, [sp, 16]
-  ldp xbase, xindx, [sp]
-  add sp, sp, 32
+  ldp x29, x30, [sp, 32]
+  ldp xindx, xbase, [sp, 16]
+  ldp xputc, xgetc, [sp]
+  add sp, sp, 48
   ret
-
-bf_overflow:
-  adr x1, overflow_msg
-  b bf_exit_err
-
 bf_underflow:
-  adr x1, underflow_msg
-
-bf_exit_err:
-  mov x0, 2
-  bl _fprintf
-  mov x0, 0
+  mov x0, 1 ; Bf_R_Underflow
   b bf_postlude
-
-overflow_msg:
-  .asciz "OVERFLOW\n"
-underflow_msg:
-  .asciz "UNDERFLOW\n"
+bf_underflow:
+  mov x0, 2 ; Bf_R_Overflow
+  b bf_postlude
 ```
 
 ### (`R`, n)
