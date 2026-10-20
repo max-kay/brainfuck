@@ -61,7 +61,7 @@ void init_terminal(void) {
   struct termios raw;
   tcgetattr(STDIN_FILENO, &orig_termios);
   raw = orig_termios;
-  raw.c_lflag &= ~(ICANON | ECHO);
+  raw.c_lflag &= ~(ICANON);
   tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 }
 
@@ -695,15 +695,20 @@ Bf_Result run_on_jit(Instructions *code) {
 #if defined(__APPLE__)
   pthread_jit_write_protect_np(0);
 #endif // defined(__APPLE__)
+
   memcpy(code_ptr, code->items, code->count * sizeof(code->items[0]));
+
 #if defined(__APPLE__)
   pthread_jit_write_protect_np(1);
   sys_icache_invalidate(code_ptr, code->count * sizeof(code->items[0]));
 #endif // defined(__APPLE__)
 
   uint8_t *tape_ptr = get_tape_region();
+  init_terminal();
 
   Bf_Result res = ((jit_fn_type)code_ptr)(tape_ptr, putchar, getchar);
+
+  reset_terminal();
   free_tape_region(tape_ptr);
   free_jit_region(code_ptr, code->count * sizeof(code->items[0]));
 
