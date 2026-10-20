@@ -125,13 +125,13 @@ bf_underflow:
 ### (`O`, n)
 ```asm
   ldrb w0, [xbase, xindx]
-  bl _putchar
+  blr xputc
 ```
 repeated n times
 
 ### (`I`, n)
 ```asm
-  bl _getchar
+  blr xgetc
   strb w0, [xbase, xindx]
 ```
 repeated n times
