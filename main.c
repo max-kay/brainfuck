@@ -9,6 +9,7 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <termios.h>
+#include <time.h>
 
 #define NOB_STRIP_PREFIX
 #define NOB_IMPLEMENTATION
@@ -282,8 +283,6 @@ bool parse_bf(String_View iter, Intermediate *ir) {
 
     case TOK_JUMP_BACKWARD:
       if (idxs.count == 0) {
-        // fprintf(stderr, "unexpected closing parens\n"); TODO: parse error
-        // type
         goto error;
       }
       size_t last_idx = da_pop(&idxs);
@@ -554,8 +553,6 @@ size_t jl_find(BranchList *jl, size_t ir_op_idx) {
 }
 
 void translate_to_code(Instructions *code, Intermediate *ir) {
-  // TODO: check all branch instructions for of by one errors
-  // compare with notes.md
   Index_Array needs_overflow_update = {0};
   Index_Array needs_underflow_update = {0};
   BranchList branch_list = {0};
@@ -735,9 +732,10 @@ char *parse_args(int argc, char **argv) {
       size_t len = 0;
       if (!parse_size(*argv, &len)) {
         fprintf(stderr, "could not parse --tape-len/-t argument\n");
+        exit(-1);
       }
-      if ((len % 1 << 12) != 0) {
-        fprintf(stderr, "provided tape len %zu is not divisibel by 2^12\n",
+      if ((len % (1 << 12)) != 0) {
+        fprintf(stderr, "provided tape len %zu is not divisible by 2^12\n",
                 len);
         len = ((len + MIN_TAPE_LEN - 1) / MIN_TAPE_LEN) * MIN_TAPE_LEN;
         fprintf(stderr, "rounded to %zu\n", len);
@@ -765,6 +763,24 @@ char *parse_args(int argc, char **argv) {
   return *argv;
 }
 
+void pprint_clock(clock_t elapsed) {
+  if (elapsed >= 60 * CLOCKS_PER_SEC) {
+    size_t mins = elapsed / (60 * CLOCKS_PER_SEC);
+    size_t secs = (elapsed - mins) / CLOCKS_PER_SEC;
+    fprintf(stderr, "%zu min %zu s", mins, secs);
+    return;
+  }
+  if (elapsed >= CLOCKS_PER_SEC) {
+    fprintf(stderr, "%.3f s", (double)elapsed / (double)CLOCKS_PER_SEC);
+    return;
+  }
+  if (elapsed >= CLOCKS_PER_SEC / 1000) {
+    fprintf(stderr, "%.3f ms", (double)elapsed / (double)CLOCKS_PER_SEC * 1000);
+    return;
+  }
+  fprintf(stderr, "%g us", (double)elapsed / (double)CLOCKS_PER_SEC * 1000000);
+}
+
 int main(int argc, char **argv) {
   char *file_name = parse_args(argc, argv);
   if (!file_exists(file_name)) {
@@ -778,27 +794,56 @@ int main(int argc, char **argv) {
 
   Intermediate ir = {0};
 
+  clock_t start = clock();
+
   if (!parse_bf(sb_to_sv(contents), &ir)) {
     print_result(Bf_R_Could_Not_Parse);
     return -1;
   }
 
+  clock_t end = clock();
+
   if (STATS) {
     fprintf(stderr, "Intermediate Representation\n");
     fprintf(stderr, "  %zu instructions\n", ir.count);
+    fprintf(stderr, "  ran for ");
+    pprint_clock(end - start);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "\n");
   }
 
   if (EMIT_IR) {
     String_Builder ir_str = {0};
     append_ir(&ir_str, &ir);
     sb_append_null(&ir_str);
-    fprintf(stderr, "%s", ir_str.items);
+    printf("%s", ir_str.items);
   }
 
   if (RUN_JIT) {
     Instructions code = {0};
+    start = clock();
     translate_to_code(&code, &ir);
+    end = clock();
+    if (STATS) {
+      fprintf(stderr, "JIT compilation\n");
+      fprintf(stderr, "  %zu instructions\n", code.count);
+      fprintf(stderr, "  compiled in ");
+      pprint_clock(end - start);
+      fprintf(stderr, "\n");
+      fprintf(stderr, "\n");
+    }
+
+    start = clock();
     Bf_Result res = run_on_jit(&code);
+    end = clock();
+    if (STATS) {
+      fprintf(stderr, "\n");
+      fprintf(stderr, "JIT program\n");
+      fprintf(stderr, "  ran for ");
+      pprint_clock(end - start);
+      fprintf(stderr, "\n");
+      fprintf(stderr, "\n");
+    }
     if (res != Bf_R_Ok) {
       print_result(res);
       return -1;
@@ -806,7 +851,18 @@ int main(int argc, char **argv) {
   }
 
   if (RUN_IR) {
+    start = clock();
     Bf_Result res = ir_interpret(&ir);
+    end = clock();
+    if (STATS) {
+      fprintf(stderr, "\n");
+      fprintf(stderr, "IR interpretation\n");
+      fprintf(stderr, "  ran for ");
+      pprint_clock(end - start);
+      fprintf(stderr, "\n");
+      fprintf(stderr, "\n");
+    }
+
     if (res != Bf_R_Ok) {
       print_result(res);
       return -1;

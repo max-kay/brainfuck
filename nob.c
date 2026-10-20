@@ -11,10 +11,6 @@
 static Cmd CMD = {0};
 
 bool run_test(String_View test_name) {
-  // TODO: use
-  // NOBDEF char *nob_temp_dir_name(const char *path);
-  // NOBDEF char *nob_tem./bf-jitp_file_name(const char *path);
-  // NOBDEF char *nob_temp_file_ext(const char *path);
   size_t alloc_mark = temp_save();
   String_Builder sb_expected = {0};
   String_Builder output = {0};
