@@ -29,14 +29,12 @@ Usage bf-jit FLAGS <filename.bf>
 
 The brainfuck code is first translated into an intermediate representation with the follwing op codes:
 
-- (`A`, n) *a*dd n to the value at tape index
-- (`S`, n) *s*ubtract n from the value at tape index
-- (`R`, n) move *r*ight by n and halt execution on overflow
-- (`L`, n) move *l*eft by n and halt execution on underflow
-- (`F`, a) jump *f*oreward to instruction a+1 if the value at the tape index is zero
-- (`B`, a) jump *b*ackeard to instruction a+1 if the value at the tape index is nonzero
-- (`I`, n) get a single char as *i*nput from stdin and write it to tape index n times
-- (`O`, n) *o*utput the value at tape index to stdout n times
+- (`ADD`, n) add n to the value at tape index
+- (`MOV`, n) move tape poiter by n an halt execution on underflow or overflow
+- (`JZR`, a) jump to instruction a+1 if the value at the tape index is zero
+- (`JNZ`, a) jump backward to instruction a+1 if the value at the tape index is nonzero
+- (`GCH`, n) get a single char as input from stdin and write it to tape index n times
+- (`PCH`, n) output the value at tape index to stdout n times
 
 ## Translation to assembly
 
@@ -83,53 +81,46 @@ bf_underflow:
   b bf_postlude
 ```
 
-### (`R`, n)
+### (`MOV`, n)
+If n > 0
 ```asm
   add xindx, xindx, n
   cmp xindx, TAPE_LEN
   b.hs bf_overflow
 ```
-
-### (`L`, n)
+If n < 0
 ```asm
-  subs xindx, xindx, n
+  subs xindx, xindx, -n
   b.lo bf_underflow
 ```
 
-### (`A`, n)
+### (`ADD`, n)
 ```asm
   ldrb w0, [xbase, xindx]
   add w1, w0, (n % 256)
   strb w1, [xbase, xindx]
 ```
 
-### (`S`, n)
-```asm
-  ldrb w0, [xbase, xindx]
-  add w1, w0, (256 - (n % 256))
-  strb w1, [xbase, xindx]
-```
-
-### (`F`, a)
+### (`JZR`, a)
 ```asm
   ldrb w0, [xbase, xindx]
   cbz w0, offset(a)
 ```
 
-### (`B`, a)
+### (`JNZ`, a)
 ```asm
   ldrb w0, [xbase, xindx]
   cbnz w0, offset(a)
 ```
 
-### (`O`, n)
+### (`PCH`, n)
 ```asm
   ldrb w0, [xbase, xindx]
   blr xputc
 ```
 repeated n times
 
-### (`I`, n)
+### (`GCH`, n)
 ```asm
   blr xgetc
   strb w0, [xbase, xindx]

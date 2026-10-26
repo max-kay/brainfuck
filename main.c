@@ -163,61 +163,28 @@ typedef enum {
 } Token;
 
 typedef enum {
-  OP_MOVE_LEFT,
-  OP_MOVE_RIGHT,
-  OP_INC,
-  OP_DEC,
-  OP_OUTPUT,
-  OP_INPUT,
-  OP_JUMP_FORWARD,
-  OP_JUMP_BACKWARD,
+  OP_MOV,
+  OP_ADD,
+  OP_PCH,
+  OP_GCH,
+  OP_JZR,
+  OP_JNZ,
 } OpCode;
 
 static inline char *op_as_str(OpCode t) {
   switch (t) {
-  case OP_MOVE_LEFT:
-    return "L";
-  case OP_MOVE_RIGHT:
-    return "R";
-  case OP_INC:
-    return "A";
-  case OP_DEC:
-    return "S";
-  case OP_OUTPUT:
-    return "O";
-  case OP_INPUT:
-    return "I";
-  case OP_JUMP_FORWARD:
-    return "F";
-  case OP_JUMP_BACKWARD:
-    return "B";
-  default:
-    UNREACHABLE("");
-  }
-}
-
-static inline OpCode token_as_op_code(Token t) {
-  switch (t) {
-  case TOK_MOVE_LEFT:
-    return OP_MOVE_LEFT;
-  case TOK_MOVE_RIGHT:
-    return OP_MOVE_RIGHT;
-  case TOK_INC:
-    return OP_INC;
-  case TOK_DEC:
-    return OP_DEC;
-  case TOK_OUTPUT:
-    return OP_OUTPUT;
-  case TOK_INPUT:
-    return OP_INPUT;
-  case TOK_JUMP_FORWARD:
-    return OP_JUMP_FORWARD;
-  case TOK_JUMP_BACKWARD:
-    return OP_JUMP_BACKWARD;
-  case TOK_START:
-    UNREACHABLE("TOK_START is no Operation");
-  case TOK_END:
-    UNREACHABLE("TOK_END is no Operation");
+  case OP_MOV:
+    return "MOV";
+  case OP_ADD:
+    return "ADD";
+  case OP_PCH:
+    return "PCH";
+  case OP_GCH:
+    return "GCH";
+  case OP_JZR:
+    return "JZR";
+  case OP_JNZ:
+    return "JNZ";
   default:
     UNREACHABLE("");
   }
@@ -251,7 +218,7 @@ Token get_next(String_View *sv) {
 
 typedef struct {
   OpCode op;
-  size_t rep_or_jump_idx;
+  ptrdiff_t rep_or_jump_idx;
 } Operation;
 
 typedef struct {
@@ -269,14 +236,13 @@ typedef struct {
 bool parse_bf(String_View iter, Intermediate *ir) {
   Index_Array idxs = {0};
 
-  Token prev_token = TOK_START;
   while (true) {
     Token token = get_next(&iter);
     Operation current_op = {0};
     switch (token) {
     case TOK_JUMP_FORWARD:
       da_append(&idxs, ir->count);
-      current_op = (Operation){.op = OP_JUMP_FORWARD, .rep_or_jump_idx = 0};
+      current_op = (Operation){.op = OP_JZR, .rep_or_jump_idx = 0};
       da_append(ir, current_op);
       break;
 
@@ -286,8 +252,7 @@ bool parse_bf(String_View iter, Intermediate *ir) {
       }
       size_t last_idx = da_pop(&idxs);
       ir->items[last_idx].rep_or_jump_idx = ir->count;
-      current_op =
-          (Operation){.op = OP_JUMP_BACKWARD, .rep_or_jump_idx = last_idx};
+      current_op = (Operation){.op = OP_JNZ, .rep_or_jump_idx = last_idx};
       da_append(ir, current_op);
       break;
 
@@ -298,16 +263,57 @@ bool parse_bf(String_View iter, Intermediate *ir) {
       goto finish;
       break;
 
-    default:
-      if (token == prev_token) {
+    case TOK_INC:
+      if (ir->count > 0 && da_last(ir).op == OP_ADD) {
         da_last(ir).rep_or_jump_idx += 1;
       } else {
-        current_op =
-            (Operation){.op = token_as_op_code(token), .rep_or_jump_idx = 1};
+        current_op = (Operation){.op = OP_ADD, .rep_or_jump_idx = 1};
         da_append(ir, current_op);
       }
+      break;
+    case TOK_DEC:
+      if (ir->count > 0 && da_last(ir).op == OP_ADD) {
+        da_last(ir).rep_or_jump_idx -= 1;
+      } else {
+        current_op = (Operation){.op = OP_ADD, .rep_or_jump_idx = -1};
+        da_append(ir, current_op);
+      }
+      break;
+
+    case TOK_MOVE_RIGHT:
+      if (ir->count > 0 && da_last(ir).op == OP_MOV) {
+        da_last(ir).rep_or_jump_idx += 1;
+      } else {
+        current_op = (Operation){.op = OP_MOV, .rep_or_jump_idx = 1};
+        da_append(ir, current_op);
+      }
+      break;
+    case TOK_MOVE_LEFT:
+      if (ir->count > 0 && da_last(ir).op == OP_MOV) {
+        da_last(ir).rep_or_jump_idx -= 1;
+      } else {
+        current_op = (Operation){.op = OP_MOV, .rep_or_jump_idx = -1};
+        da_append(ir, current_op);
+      }
+      break;
+
+    case TOK_OUTPUT:
+      if (ir->count > 0 && da_last(ir).op == OP_PCH) {
+        da_last(ir).rep_or_jump_idx += 1;
+      } else {
+        current_op = (Operation){.op = OP_PCH, .rep_or_jump_idx = 1};
+        da_append(ir, current_op);
+      }
+      break;
+    case TOK_INPUT:
+      if (ir->count > 0 && da_last(ir).op == OP_GCH) {
+        da_last(ir).rep_or_jump_idx += 1;
+      } else {
+        current_op = (Operation){.op = OP_GCH, .rep_or_jump_idx = 1};
+        da_append(ir, current_op);
+      }
+      break;
     }
-    prev_token = token;
   }
 
 finish:
@@ -327,60 +333,51 @@ Bf_Result ir_interpret(Intermediate *ir) {
   init_terminal();
 
   size_t instruction_ptr = 0;
-  size_t tape_ptr = 0;
+  ptrdiff_t tape_ptr = 0;
   uint8_t *tape = get_tape_region();
   Bf_Result result = Bf_R_Ok;
   while (instruction_ptr < ir->count) {
     Operation op = ir->items[instruction_ptr];
     uint8_t tape_val = tape[tape_ptr];
     switch (op.op) {
-    case OP_INC:
-      tape_val += op.rep_or_jump_idx;
-      tape[tape_ptr] = tape_val;
-      instruction_ptr++;
-      break;
-    case OP_DEC:
-      tape_val -= op.rep_or_jump_idx;
+    case OP_ADD:
+      tape_val += (0xFF & op.rep_or_jump_idx);
       tape[tape_ptr] = tape_val;
       instruction_ptr++;
       break;
 
-    case OP_MOVE_RIGHT:
+    case OP_MOV:
       tape_ptr += op.rep_or_jump_idx;
-      if (tape_ptr >= TAPE_LEN) {
+      if (tape_ptr >= (ptrdiff_t)TAPE_LEN) {
         result = Bf_R_Overflow;
         goto finish;
       }
-      instruction_ptr++;
-      break;
-    case OP_MOVE_LEFT:
-      if (op.rep_or_jump_idx > tape_ptr) {
+      if (tape_ptr < 0) {
         result = Bf_R_Underflow;
         goto finish;
       }
-      tape_ptr -= op.rep_or_jump_idx;
       instruction_ptr++;
       break;
 
-    case OP_INPUT:
-      for (size_t i = 0; i < op.rep_or_jump_idx; i++)
+    case OP_GCH:
+      for (ptrdiff_t i = 0; i < op.rep_or_jump_idx; i++)
         tape[tape_ptr] = getchar();
       instruction_ptr++;
       break;
-    case OP_OUTPUT:
-      for (size_t i = 0; i < op.rep_or_jump_idx; i++)
+    case OP_PCH:
+      for (ptrdiff_t i = 0; i < op.rep_or_jump_idx; i++)
         putchar(tape_val);
       instruction_ptr++;
       break;
 
-    case OP_JUMP_FORWARD:
+    case OP_JZR:
       if (tape_val == 0) {
         instruction_ptr = op.rep_or_jump_idx + 1;
       } else {
         instruction_ptr++;
       }
       break;
-    case OP_JUMP_BACKWARD:
+    case OP_JNZ:
       if (tape_val != 0) {
         instruction_ptr = op.rep_or_jump_idx + 1;
       } else {
@@ -537,7 +534,7 @@ ENCODE_ASM("  ldp x29, x30, [sp, 32]\n"
            POSTLUDE_START, POSTLUDE_END);
 
 typedef struct {
-  size_t forward_irop_idx, backward_irop_idx, start_b_index;
+  ptrdiff_t forward_irop_idx, backward_irop_idx, start_b_index;
 } BranchEntry;
 
 typedef struct {
@@ -546,7 +543,7 @@ typedef struct {
   size_t capacity;
 } BranchList;
 
-size_t jl_find(BranchList *jl, size_t ir_op_idx) {
+size_t jl_find(BranchList *jl, ptrdiff_t ir_op_idx) {
   for (size_t i = 0; i < jl->count; i++) {
     if (jl->items[i].forward_irop_idx == ir_op_idx) {
       return i;
@@ -564,43 +561,41 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
     switch (op.op) {
-    case OP_MOVE_RIGHT:
-      da_append(code, add_idx(op.rep_or_jump_idx));
-      da_append(code, cmp_idx());
-      da_append(&needs_overflow_update, code->count);
-      da_append(code, bhs());
-      break;
-    case OP_MOVE_LEFT:
-      da_append(code, sub_idx_with_flag(op.rep_or_jump_idx));
-      da_append(&needs_underflow_update, code->count);
-      da_append(code, blo());
+    case OP_MOV:
+      if (op.rep_or_jump_idx == 0) {
+        // DO NOTHING
+      } else if (op.rep_or_jump_idx > 0) {
+        da_append(code, add_idx(op.rep_or_jump_idx));
+        da_append(code, cmp_idx());
+        da_append(&needs_overflow_update, code->count);
+        da_append(code, bhs());
+      } else {
+        da_append(code, sub_idx_with_flag(-op.rep_or_jump_idx));
+        da_append(&needs_underflow_update, code->count);
+        da_append(code, blo());
+      }
       break;
 
-    case OP_INC:
+    case OP_ADD:
       da_append(code, ld_tape(0));
-      da_append(code, add(0, 0, op.rep_or_jump_idx % 256));
-      da_append(code, str_tape(0));
-      break;
-    case OP_DEC:
-      da_append(code, ld_tape(0));
-      da_append(code, add(0, 0, 256 - (op.rep_or_jump_idx % 256)));
+      da_append(code, add(0, 0, (0xFF & op.rep_or_jump_idx)));
       da_append(code, str_tape(0));
       break;
 
-    case OP_OUTPUT:
-      for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
+    case OP_PCH:
+      for (ptrdiff_t j = 0; j < op.rep_or_jump_idx; j++) {
         da_append(code, ld_tape(0));
         da_append(code, blr_putc());
       }
       break;
-    case OP_INPUT:
-      for (size_t j = 0; j < op.rep_or_jump_idx; j++) {
+    case OP_GCH:
+      for (ptrdiff_t j = 0; j < op.rep_or_jump_idx; j++) {
         da_append(code, blr_getc());
       }
       da_append(code, str_tape(0));
       break;
 
-    case OP_JUMP_FORWARD:
+    case OP_JZR:
       da_append(code, ld_tape(0));
       da_append(code, cbz(0));
       BranchEntry pair = {
@@ -610,7 +605,7 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
       };
       da_append(&branch_list, pair);
       break;
-    case OP_JUMP_BACKWARD:
+    case OP_JNZ:
       da_append(code, ld_tape(0));
       ptrdiff_t upper_b_idx = (ptrdiff_t)code->count;
       da_append(code, cbnz(0));
