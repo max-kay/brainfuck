@@ -167,8 +167,8 @@ typedef enum {
   OP_ADD,
   OP_PCH,
   OP_GCH,
-  OP_JZR,
-  OP_JNZ,
+  OP_LSTART,
+  OP_LEND,
 } OpCode;
 
 static inline char *op_as_str(OpCode t) {
@@ -181,10 +181,10 @@ static inline char *op_as_str(OpCode t) {
     return "PCH";
   case OP_GCH:
     return "GCH";
-  case OP_JZR:
-    return "JZR";
-  case OP_JNZ:
-    return "JNZ";
+  case OP_LSTART:
+    return "LSTART";
+  case OP_LEND:
+    return "LEND";
   default:
     UNREACHABLE("");
   }
@@ -241,9 +241,9 @@ bool parse_bf(String_View iter, Intermediate *ir) {
     Operation current_op = {0};
     switch (token) {
     case TOK_JUMP_FORWARD:
-      da_append(&idxs, ir->count);
-      current_op = (Operation){.op = OP_JZR, .rep_or_jump_idx = 0};
+      current_op = (Operation){.op = OP_LSTART, .rep_or_jump_idx = 0};
       da_append(ir, current_op);
+      da_append(&idxs, ir->count);
       break;
 
     case TOK_JUMP_BACKWARD:
@@ -251,9 +251,9 @@ bool parse_bf(String_View iter, Intermediate *ir) {
         goto error;
       }
       size_t last_idx = da_pop(&idxs);
-      ir->items[last_idx].rep_or_jump_idx = ir->count;
-      current_op = (Operation){.op = OP_JNZ, .rep_or_jump_idx = last_idx};
+      current_op = (Operation){.op = OP_LEND, .rep_or_jump_idx = last_idx};
       da_append(ir, current_op);
+      ir->items[last_idx - 1].rep_or_jump_idx = ir->count;
       break;
 
     case TOK_START:
@@ -370,16 +370,16 @@ Bf_Result ir_interpret(Intermediate *ir) {
       instruction_ptr++;
       break;
 
-    case OP_JZR:
+    case OP_LSTART:
       if (tape_val == 0) {
-        instruction_ptr = op.rep_or_jump_idx + 1;
+        instruction_ptr = op.rep_or_jump_idx;
       } else {
         instruction_ptr++;
       }
       break;
-    case OP_JNZ:
+    case OP_LEND:
       if (tape_val != 0) {
-        instruction_ptr = op.rep_or_jump_idx + 1;
+        instruction_ptr = op.rep_or_jump_idx;
       } else {
         instruction_ptr++;
       }
@@ -396,7 +396,7 @@ finish:
 void append_ir(String_Builder *sb, Intermediate *ir) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
-    sb_appendf(sb, "%0*zu: %s %*zu\n", 3, i, op_as_str(op.op), 4,
+    sb_appendf(sb, "%0*zu: %s %*ld\n", 3, i, op_as_str(op.op), 4,
                op.rep_or_jump_idx);
   }
 }
@@ -534,28 +534,28 @@ ENCODE_ASM("  ldp x29, x30, [sp, 32]\n"
            POSTLUDE_START, POSTLUDE_END);
 
 typedef struct {
-  ptrdiff_t forward_irop_idx, backward_irop_idx, start_b_index;
-} BranchEntry;
+  ptrdiff_t enter_loop_irop, exit_loop_irop, skip_loop_instr_idx;
+} Loop_Entry;
 
 typedef struct {
-  BranchEntry *items;
+  Loop_Entry *items;
   size_t count;
   size_t capacity;
-} BranchList;
+} Loop_List;
 
-size_t jl_find(BranchList *jl, ptrdiff_t ir_op_idx) {
+size_t ll_find(Loop_List *jl, ptrdiff_t ir_op_idx) {
   for (size_t i = 0; i < jl->count; i++) {
-    if (jl->items[i].forward_irop_idx == ir_op_idx) {
+    if (jl->items[i].enter_loop_irop == ir_op_idx) {
       return i;
     }
   }
-  return SIZE_MAX;
+  UNREACHABLE("Loop_List is allways valid");
 }
 
 void translate_to_code(Instructions *code, Intermediate *ir) {
   Index_Array needs_overflow_update = {0};
   Index_Array needs_underflow_update = {0};
-  BranchList branch_list = {0};
+  Loop_List loop_list = {0};
   da_append_many(code, PRELUDE_START, PRELUDE_END - PRELUDE_START);
 
   for (size_t i = 0; i < ir->count; i++) {
@@ -577,9 +577,11 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
       break;
 
     case OP_ADD:
-      da_append(code, ld_tape(0));
-      da_append(code, add(0, 0, (0xFF & op.rep_or_jump_idx)));
-      da_append(code, str_tape(0));
+      if ((0xFF & op.rep_or_jump_idx) != 0) {
+        da_append(code, ld_tape(0));
+        da_append(code, add(0, 0, (0xFF & op.rep_or_jump_idx)));
+        da_append(code, str_tape(0));
+      }
       break;
 
     case OP_PCH:
@@ -595,26 +597,26 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
       da_append(code, str_tape(0));
       break;
 
-    case OP_JZR:
+    case OP_LSTART:
       da_append(code, ld_tape(0));
       da_append(code, cbz(0));
-      BranchEntry pair = {
-          .forward_irop_idx = i,
-          .backward_irop_idx = op.rep_or_jump_idx,
-          .start_b_index = code->count - 1,
+      Loop_Entry pair = {
+          .enter_loop_irop = i + 1,
+          .exit_loop_irop = op.rep_or_jump_idx,
+          .skip_loop_instr_idx = code->count - 1,
       };
-      da_append(&branch_list, pair);
+      da_append(&loop_list, pair);
       break;
-    case OP_JNZ:
+    case OP_LEND:
       da_append(code, ld_tape(0));
       ptrdiff_t upper_b_idx = (ptrdiff_t)code->count;
       da_append(code, cbnz(0));
 
-      size_t idx = jl_find(&branch_list, op.rep_or_jump_idx);
-      NOB_ASSERT(idx != SIZE_MAX);
-      NOB_ASSERT(branch_list.items[idx].forward_irop_idx == op.rep_or_jump_idx);
+      Loop_Entry loop_entry =
+          loop_list.items[ll_find(&loop_list, op.rep_or_jump_idx)];
+      NOB_ASSERT(loop_entry.exit_loop_irop == (ptrdiff_t)(i + 1));
 
-      ptrdiff_t lower_b_idx = branch_list.items[idx].start_b_index;
+      ptrdiff_t lower_b_idx = loop_entry.skip_loop_instr_idx;
 
       // link the branches
       link_cond_branch(&code->items[lower_b_idx],
@@ -656,7 +658,7 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
 
   da_free(needs_underflow_update);
   da_free(needs_overflow_update);
-  da_free(branch_list);
+  da_free(loop_list);
 }
 
 Bf_Result run_on_jit(Instructions *code) {

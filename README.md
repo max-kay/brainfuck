@@ -31,10 +31,10 @@ The brainfuck code is first translated into an intermediate representation with 
 
 - (`ADD`, n) add n to the value at tape index
 - (`MOV`, n) move tape poiter by n an halt execution on underflow or overflow
-- (`JZR`, a) jump to instruction a+1 if the value at the tape index is zero
-- (`JNZ`, a) jump backward to instruction a+1 if the value at the tape index is nonzero
 - (`GCH`, n) get a single char as input from stdin and write it to tape index n times
 - (`PCH`, n) output the value at tape index to stdout n times
+- (`LSTART`, a) jump forward to instruction a if the value at the tape index is zero
+- (`LEND`, a) jump backward to instruction a if the value at the tape index is nonzero
 
 ## Translation to assembly
 
@@ -101,13 +101,13 @@ If n < 0
   strb w1, [xbase, xindx]
 ```
 
-### (`JZR`, a)
+### (`LSTART`, a)
 ```asm
   ldrb w0, [xbase, xindx]
   cbz w0, offset(a)
 ```
 
-### (`JNZ`, a)
+### (`LEND`, a)
 ```asm
   ldrb w0, [xbase, xindx]
   cbnz w0, offset(a)
