@@ -19,7 +19,7 @@ Run tests with `./nob test`
 Usage bf-jit FLAGS <filename.bf>
    --interpret-ir   -i     interpret ir directly
    --stats          -s     print statistics
-   --tape-len       -t     set length of tape (multiples of 2^12 = 4'096)
+   --tape-len       -t     number of pages used for tape (xxxx on this machine)
    --emit-ir        -e     emit intermediate representation
    --test-output           output for tests
 ```
@@ -44,8 +44,7 @@ The return value specifies if the function exited normaly (`true`) or if an out 
 
 One register holds the tape pointer (`xtape`) throughout the whole program.
 
-Since x19 to x20 are callee preserved registers, `xbase` and `xindx` will use one of those registers.
-Like this they never need to be preserved.
+`xtape` is chosen to be x19, since it is a callee preserved register.
 
 To call `getchar` and `putchar` the function pointers are passed to the function.
 Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used for them.
@@ -84,6 +83,7 @@ If n < 0
 ```
 
 ### (`ADD`, n)
+If n != 0
 ```asm
   ldrb w0, [xtape]
   add w1, w0, (n % 256)
