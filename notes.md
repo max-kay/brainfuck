@@ -15,5 +15,7 @@ example optimizations
 http://calmerthanyouare.org/2015/01/07/optimizing-brainfuck.html
 (no https)
 
+its surprising that the change to using the tape ptr directly and having bound checks through os made the code slower
+
 ## extensions
 https://esolangs.org/wiki/Extended_Brainfuck

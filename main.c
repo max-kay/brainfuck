@@ -15,8 +15,7 @@
 #if defined(__APPLE__)
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
-#else // defined(__APPLE__)
-#error "Compilation for Linux is currently disabled during prototyping."
+#else  // defined(__APPLE__)
 #endif // defined(__APPLE__)
 
 #define NOB_STRIP_PREFIX
@@ -137,6 +136,8 @@ static uint8_t *TAPE_PTR = NULL;
 static uint8_t *LOW_GUARD = NULL;
 static uint8_t *HIGH_GUARD = NULL;
 
+static sigjmp_buf jump_env;
+
 #if defined(__APPLE__)
 static inline void *get_jit_region(size_t size) {
   void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -148,8 +149,6 @@ static inline void *get_jit_region(size_t size) {
 static inline void free_jit_region(void *ptr, size_t size) {
   NOB_ASSERT(munmap(ptr, size) == 0);
 }
-
-static sigjmp_buf jump_env;
 
 static void on_fault(int sig, siginfo_t *info, void *uctx) {
   UNUSED(sig);
@@ -186,7 +185,7 @@ static inline void free_tape_region() {
   NOB_ASSERT(munmap(LOW_GUARD, PAGE_SIZE * (2 + TAPE_PAGES)) == 0);
 }
 
-#else  // defined(__APPLE__)
+#else // defined(__APPLE__)
 static inline void *get_jit_region(size_t size) {
   void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -198,16 +197,40 @@ static inline void free_jit_region(void *ptr, size_t size) {
   NOB_ASSERT(munmap(ptr, size) == 0);
 }
 
-static inline uint8_t *get_tape_region(void) {
-  void *ptr = mmap(NULL, TAPE_LEN, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  NOB_ASSERT(ptr != MAP_FAILED);
-  return ptr;
+static void on_fault(int sig, siginfo_t *info, void *uctx) {
+  UNUSED(sig);
+  UNUSED(uctx);
+  uint8_t *addr = (uint8_t *)info->si_addr;
+  if (LOW_GUARD <= addr && addr < LOW_GUARD + PAGE_SIZE)
+    RESULT = Bf_R_Underflow;
+  else if (HIGH_GUARD <= addr && addr < HIGH_GUARD + PAGE_SIZE)
+    RESULT = Bf_R_Overflow;
+  else
+    RESULT = Bf_R_Unknown;
+  siglongjmp(jump_env, 1);
 }
 
-static inline void free_tape_region(void *ptr) {
-  NOB_ASSERT(munmap(ptr - PAGE_SIZE, PAGE_SIZE * (2 + TAPE_PAGES)) == 0);
+static inline void get_tape_region() {
+  uint8_t *base = mmap(NULL, (2 + TAPE_PAGES) * PAGE_SIZE, PROT_NONE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  NOB_ASSERT(base != MAP_FAILED);
+  mprotect(base + PAGE_SIZE, TAPE_PAGES * PAGE_SIZE, PROT_READ | PROT_WRITE);
+
+  struct sigaction sa = {0};
+  sa.sa_sigaction = on_fault;
+  sa.sa_flags = SA_SIGINFO;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGSEGV, &sa, NULL);
+
+  LOW_GUARD = base;
+  HIGH_GUARD = base + (1 + TAPE_PAGES) * PAGE_SIZE;
+  TAPE_PTR = base + PAGE_SIZE;
 }
+
+static inline void free_tape_region() {
+  NOB_ASSERT(munmap(LOW_GUARD, PAGE_SIZE * (2 + TAPE_PAGES)) == 0);
+}
+
 #endif // defined(__APPLE__)
 
 typedef enum {
@@ -668,6 +691,9 @@ void run_on_jit(Instructions *code) {
 #if defined(__APPLE__)
   pthread_jit_write_protect_np(1);
   sys_icache_invalidate(code_ptr, code->count * sizeof(code->items[0]));
+#else  // defined(__APPLE__)
+  __builtin___clear_cache(code_ptr, (char *)code_ptr +
+                                        code->count * sizeof(code->items[0]));
 #endif // defined(__APPLE__)
 
   get_tape_region();
@@ -800,8 +826,13 @@ int main(int argc, char **argv) {
   }
   init_terminal();
 
+#ifdef __APPLE__
   if (sigsetjmp((int *)&jump_env, 1) != 0)
     goto error;
+#else  // __APPLE__
+  if (sigsetjmp(jump_env, 1) != 0)
+    goto error;
+#endif // __APPLE__
 
   Intermediate ir = {0};
 
