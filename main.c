@@ -153,13 +153,18 @@ static inline void free_jit_region(void *ptr, size_t size) {
 static void on_fault(int sig, siginfo_t *info, void *uctx) {
   UNUSED(sig);
   UNUSED(uctx);
-  uint8_t *addr = (uint8_t *)info->si_addr;
-  if (LOW_GUARD <= addr && addr < LOW_GUARD + PAGE_SIZE)
-    RESULT = Bf_R_Underflow;
-  else if (HIGH_GUARD <= addr && addr < HIGH_GUARD + PAGE_SIZE)
-    RESULT = Bf_R_Overflow;
-  else
+  if (LOW_GUARD == NULL | TAPE_PTR == NULL | HIGH_GUARD == NULL) {
     RESULT = Bf_R_Unknown;
+    siglongjmp((int *)jump_env, 1);
+  }
+  uint8_t *addr = (uint8_t *)info->si_addr;
+  if (LOW_GUARD <= addr && addr < LOW_GUARD + PAGE_SIZE) {
+    RESULT = Bf_R_Underflow;
+  } else if (HIGH_GUARD <= addr && addr < HIGH_GUARD + PAGE_SIZE) {
+    RESULT = Bf_R_Overflow;
+  } else {
+    RESULT = Bf_R_Unknown;
+  }
   siglongjmp((int *)jump_env, 1);
 }
 
@@ -183,6 +188,9 @@ static inline void get_tape_region() {
 
 static inline void free_tape_region() {
   NOB_ASSERT(munmap(LOW_GUARD, PAGE_SIZE * (2 + TAPE_PAGES)) == 0);
+  LOW_GUARD = NULL;
+  TAPE_PTR = NULL;
+  HIGH_GUARD = NULL;
 }
 
 #else // defined(__APPLE__)
@@ -200,6 +208,10 @@ static inline void free_jit_region(void *ptr, size_t size) {
 static void on_fault(int sig, siginfo_t *info, void *uctx) {
   UNUSED(sig);
   UNUSED(uctx);
+  if (LOW_GUARD == NULL | TAPE_PTR == NULL | HIGH_GUARD == NULL) {
+    RESULT = Bf_R_Unknown;
+    siglongjmp(jump_env, 1);
+  }
   uint8_t *addr = (uint8_t *)info->si_addr;
   if (LOW_GUARD <= addr && addr < LOW_GUARD + PAGE_SIZE)
     RESULT = Bf_R_Underflow;
@@ -229,6 +241,9 @@ static inline void get_tape_region() {
 
 static inline void free_tape_region() {
   NOB_ASSERT(munmap(LOW_GUARD, PAGE_SIZE * (2 + TAPE_PAGES)) == 0);
+  LOW_GUARD = NULL;
+  TAPE_PTR = NULL;
+  HIGH_GUARD = NULL;
 }
 
 #endif // defined(__APPLE__)

@@ -116,3 +116,20 @@ repeated n times
 ```
 repeated n times
 
+## Underflow and Overflow handling
+Underflows and overflows are handled by the operating system.
+The tape region is a multiple of the page size of the system,
+which allows me to allocate a page with no permission below and above the valid region.
+Out of bounds access is then handeled by catching the segfault and is determined to be an underflow or overflow
+by which of the guard regions is accessed.
+
+### Limmitations
+
+1. If the memory access by brainfuck is outside the bounds by more than a region an unknown error is returned,
+  as I cannot be sure if the access was meant to access the tape.
+2. The validity of a tape address is only checked on access to a value.
+  The tape pointer is allowed to be invalid if it is never accessed.
+  The programm `<> +` does not report an underflow even though after `<` it points outside the tape region.
+
+
+
