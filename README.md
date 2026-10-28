@@ -76,35 +76,35 @@ Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used fo
 ### (`MOV`, n)
 If n > 0
 ```asm
-  add xindx, xindx, n
+  add xtape, xtape, n
 ```
 If n < 0
 ```asm
-  sub xindx, xindx, -n
+  sub xtape, xtape, -n
 ```
 
 ### (`ADD`, n)
 ```asm
-  ldrb w0, [xbase, xindx]
+  ldrb w0, [xtape]
   add w1, w0, (n % 256)
-  strb w1, [xbase, xindx]
+  strb w1, [xtape]
 ```
 
 ### (`LSTART`, a)
 ```asm
-  ldrb w0, [xbase, xindx]
+  ldrb w0, [xtape]
   cbz w0, offset(a)
 ```
 
 ### (`LEND`, a)
 ```asm
-  ldrb w0, [xbase, xindx]
+  ldrb w0, [xtape]
   cbnz w0, offset(a)
 ```
 
 ### (`PCH`, n)
 ```asm
-  ldrb w0, [xbase, xindx]
+  ldrb w0, [xtape]
   blr xputc
 ```
 repeated n times
@@ -112,7 +112,7 @@ repeated n times
 ### (`GCH`, n)
 ```asm
   blr xgetc
-  strb w0, [xbase, xindx]
+  strb w0, [xtape]
 ```
 repeated n times
 
