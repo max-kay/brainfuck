@@ -42,20 +42,21 @@ The assembly for the one brainfuck file is translated to a single function:
 `Bf_Result bf_assembled(void *tape_base, int *putchar(int), int *getchar(void));`
 The return value specifies if the function exited normaly (`true`) or if an out of bounds error occurred (`false`).
 
-One register holds the tape base pointer (`xbase`) and one holds the tape index (`xindx`) throughout the whole program.
+One register holds the tape pointer (`xtape`) throughout the whole program.
 
 Since x19 to x20 are callee preserved registers, `xbase` and `xindx` will use one of those registers.
 Like this they never need to be preserved.
 
 To call `getchar` and `putchar` the function pointers are passed to the function.
-Simmilar to `xbase` and `xindx` callee preserved registers (`xgetc` and `xputc`) are used for them.
+Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used for them.
+
 
 ### Prelude
 ```asm
   sub sp, sp, 48
   stp x29, x30, [sp, 32]
   mov x29, sp
-  stp xindx, xbase , [sp, 16]
+  stp xtape, xunused , [sp, 16]
   stp xgetc, xputc, [sp]
   mov xindx, xzr
   mov xbase, x0
@@ -65,33 +66,21 @@ Simmilar to `xbase` and `xindx` callee preserved registers (`xgetc` and `xputc`)
 
 ### Postlude
 ```asm
-  mov x0, 0 ; Bf_R_Ok
-
-bf_postlude:
   ldp x29, x30, [sp, 32]
-  ldp xindx, xbase, [sp, 16]
+  ldp xtape, xunused, [sp, 16]
   ldp xputc, xgetc, [sp]
   add sp, sp, 48
   ret
-bf_underflow:
-  mov x0, 1 ; Bf_R_Underflow
-  b bf_postlude
-bf_underflow:
-  mov x0, 2 ; Bf_R_Overflow
-  b bf_postlude
 ```
 
 ### (`MOV`, n)
 If n > 0
 ```asm
   add xindx, xindx, n
-  cmp xindx, TAPE_LEN
-  b.hs bf_overflow
 ```
 If n < 0
 ```asm
-  subs xindx, xindx, -n
-  b.lo bf_underflow
+  sub xindx, xindx, -n
 ```
 
 ### (`ADD`, n)
