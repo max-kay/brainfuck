@@ -47,10 +47,6 @@
     _enc;                                                                      \
   })
 
-// #define INDEX_REG (uint32_t)19
-// #define INDEX_REG_STR "x19"
-// #define BASE_REG (uint32_t)20
-// #define BASE_REG_STR "x20"
 #define TAPE_REG (uint32_t)19
 #define TAPE_REG_STR "x19"
 #define UNUSED_REG (uint32_t)20
@@ -261,34 +257,6 @@ typedef enum {
   TOK_END,
 } Token;
 
-typedef enum {
-  OP_MOV,
-  OP_ADD,
-  OP_PCH,
-  OP_GCH,
-  OP_LSTART,
-  OP_LEND,
-} OpCode;
-
-static inline char *op_as_str(OpCode t) {
-  switch (t) {
-  case OP_MOV:
-    return "MOV";
-  case OP_ADD:
-    return "ADD";
-  case OP_PCH:
-    return "PCH";
-  case OP_GCH:
-    return "GCH";
-  case OP_LSTART:
-    return "LSTART";
-  case OP_LEND:
-    return "LEND";
-  default:
-    UNREACHABLE("");
-  }
-}
-
 Token get_next(String_View *sv) {
   while ((sv->count--) > 0) {
     switch (*(sv->items++)) {
@@ -315,10 +283,49 @@ Token get_next(String_View *sv) {
   return TOK_END;
 }
 
+typedef enum {
+  // operand0 signed amout to move
+  OP_MOV,
+  // operand0 amount to add
+  // operand1 offset
+  OP_ADD,
+  // operand0 repetitions
+  OP_PCH,
+  // operand0 repetitions
+  OP_GCH,
+  // operand0 exit loop ir idx
+  OP_LSTART,
+  // operand0 start loop ir idx
+  OP_LEND,
+  OP_NOP,
+} OpCode;
+
 typedef struct {
   OpCode op;
-  ptrdiff_t rep_or_jump_idx;
+  ptrdiff_t operand0;
+  ptrdiff_t operand1;
 } Operation;
+
+static inline char *op_as_str(OpCode t) {
+  switch (t) {
+  case OP_MOV:
+    return "MOV";
+  case OP_ADD:
+    return "ADD";
+  case OP_PCH:
+    return "PCH";
+  case OP_GCH:
+    return "GCH";
+  case OP_LSTART:
+    return "LSTART";
+  case OP_LEND:
+    return "LEND";
+  case OP_NOP:
+    return "NOP";
+  default:
+    UNREACHABLE("");
+  }
+}
 
 typedef struct {
   Operation *items;
@@ -340,7 +347,7 @@ bool parse_bf(String_View iter, Intermediate *ir) {
     Operation current_op = {0};
     switch (token) {
     case TOK_JUMP_FORWARD:
-      current_op = (Operation){.op = OP_LSTART, .rep_or_jump_idx = 0};
+      current_op = (Operation){.op = OP_LSTART, .operand0 = 0};
       da_append(ir, current_op);
       da_append(&idxs, ir->count);
       break;
@@ -350,9 +357,9 @@ bool parse_bf(String_View iter, Intermediate *ir) {
         goto error;
       }
       size_t last_idx = da_pop(&idxs);
-      current_op = (Operation){.op = OP_LEND, .rep_or_jump_idx = last_idx};
+      current_op = (Operation){.op = OP_LEND, .operand0 = last_idx};
       da_append(ir, current_op);
-      ir->items[last_idx - 1].rep_or_jump_idx = ir->count;
+      ir->items[last_idx - 1].operand0 = ir->count;
       break;
 
     case TOK_START:
@@ -364,51 +371,51 @@ bool parse_bf(String_View iter, Intermediate *ir) {
 
     case TOK_INC:
       if (ir->count > 0 && da_last(ir).op == OP_ADD) {
-        da_last(ir).rep_or_jump_idx += 1;
+        da_last(ir).operand0 += 1;
       } else {
-        current_op = (Operation){.op = OP_ADD, .rep_or_jump_idx = 1};
+        current_op = (Operation){.op = OP_ADD, .operand0 = 1};
         da_append(ir, current_op);
       }
       break;
     case TOK_DEC:
       if (ir->count > 0 && da_last(ir).op == OP_ADD) {
-        da_last(ir).rep_or_jump_idx -= 1;
+        da_last(ir).operand0 -= 1;
       } else {
-        current_op = (Operation){.op = OP_ADD, .rep_or_jump_idx = -1};
+        current_op = (Operation){.op = OP_ADD, .operand0 = -1};
         da_append(ir, current_op);
       }
       break;
 
     case TOK_MOVE_RIGHT:
       if (ir->count > 0 && da_last(ir).op == OP_MOV) {
-        da_last(ir).rep_or_jump_idx += 1;
+        da_last(ir).operand0 += 1;
       } else {
-        current_op = (Operation){.op = OP_MOV, .rep_or_jump_idx = 1};
+        current_op = (Operation){.op = OP_MOV, .operand0 = 1};
         da_append(ir, current_op);
       }
       break;
     case TOK_MOVE_LEFT:
       if (ir->count > 0 && da_last(ir).op == OP_MOV) {
-        da_last(ir).rep_or_jump_idx -= 1;
+        da_last(ir).operand0 -= 1;
       } else {
-        current_op = (Operation){.op = OP_MOV, .rep_or_jump_idx = -1};
+        current_op = (Operation){.op = OP_MOV, .operand0 = -1};
         da_append(ir, current_op);
       }
       break;
 
     case TOK_OUTPUT:
       if (ir->count > 0 && da_last(ir).op == OP_PCH) {
-        da_last(ir).rep_or_jump_idx += 1;
+        da_last(ir).operand0 += 1;
       } else {
-        current_op = (Operation){.op = OP_PCH, .rep_or_jump_idx = 1};
+        current_op = (Operation){.op = OP_PCH, .operand0 = 1};
         da_append(ir, current_op);
       }
       break;
     case TOK_INPUT:
       if (ir->count > 0 && da_last(ir).op == OP_GCH) {
-        da_last(ir).rep_or_jump_idx += 1;
+        da_last(ir).operand0 += 1;
       } else {
-        current_op = (Operation){.op = OP_GCH, .rep_or_jump_idx = 1};
+        current_op = (Operation){.op = OP_GCH, .operand0 = 1};
         da_append(ir, current_op);
       }
       break;
@@ -428,6 +435,62 @@ error:
   return false;
 }
 
+typedef struct {
+  Operation *start;
+  size_t len;
+  bool loop_enclosed;
+  bool has_io;
+} Basic_Block;
+
+typedef struct {
+  Basic_Block *items;
+  size_t count;
+  size_t capacity;
+} BB_List;
+
+void ir_optimize(Intermediate *ir) {
+  BB_List basic_blocks = {0};
+  size_t current_start = 0;
+
+  bool had_io = false;
+  bool started_with_loop_start = false;
+  Basic_Block block;
+
+  for (size_t i = 0; i < ir->count; i++) {
+    Operation op = ir->items[i];
+    switch (op.op) {
+    case OP_LSTART:
+    case OP_LEND:
+      block = (Basic_Block){
+          .start = &ir->items[current_start],
+          .len = i - current_start,
+          .loop_enclosed = started_with_loop_start && (op.op == OP_LEND),
+          .has_io = had_io,
+      };
+      da_append(&basic_blocks, block);
+      started_with_loop_start = (op.op == OP_LSTART);
+      had_io = false;
+      break;
+    case OP_GCH:
+    case OP_PCH:
+      had_io = true;
+      break;
+    default:
+      break;
+    }
+  }
+  if (current_start != ir->count) {
+    block = (Basic_Block){
+        .start = &ir->items[current_start],
+        .has_io = had_io,
+        .loop_enclosed = false,
+        .len = ir->count - current_start,
+    };
+    da_append(&basic_blocks, block);
+  }
+  da_free(basic_blocks);
+}
+
 void ir_interpret(Intermediate *ir) {
   size_t instruction_ptr = 0;
   ptrdiff_t tape_ptr = 0;
@@ -437,40 +500,42 @@ void ir_interpret(Intermediate *ir) {
     uint8_t tape_val = TAPE_PTR[tape_ptr];
     switch (op.op) {
     case OP_ADD:
-      tape_val += (0xFF & op.rep_or_jump_idx);
+      tape_val += (0xFF & op.operand0);
       TAPE_PTR[tape_ptr] = tape_val;
       instruction_ptr++;
       break;
 
     case OP_MOV:
-      tape_ptr += op.rep_or_jump_idx;
+      tape_ptr += op.operand0;
       instruction_ptr++;
       break;
 
     case OP_GCH:
-      for (ptrdiff_t i = 0; i < op.rep_or_jump_idx; i++)
+      for (ptrdiff_t i = 0; i < op.operand0; i++)
         TAPE_PTR[tape_ptr] = getchar();
       instruction_ptr++;
       break;
     case OP_PCH:
-      for (ptrdiff_t i = 0; i < op.rep_or_jump_idx; i++)
+      for (ptrdiff_t i = 0; i < op.operand0; i++)
         putchar(tape_val);
       instruction_ptr++;
       break;
 
     case OP_LSTART:
       if (tape_val == 0) {
-        instruction_ptr = op.rep_or_jump_idx;
+        instruction_ptr = op.operand0;
       } else {
         instruction_ptr++;
       }
       break;
     case OP_LEND:
       if (tape_val != 0) {
-        instruction_ptr = op.rep_or_jump_idx;
+        instruction_ptr = op.operand0;
       } else {
         instruction_ptr++;
       }
+      break;
+    case OP_NOP:
       break;
     }
   }
@@ -478,11 +543,11 @@ void ir_interpret(Intermediate *ir) {
   free_tape_region();
 }
 
-void append_ir(String_Builder *sb, Intermediate *ir) {
+void sb_append_ir(String_Builder *sb, Intermediate *ir) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
-    sb_appendf(sb, "%*zu: %-6s %*ld\n", 5, i, op_as_str(op.op), 7,
-               op.rep_or_jump_idx);
+    sb_appendf(sb, "%*zu: %-6s %*ld %*ld\n", 5, i, op_as_str(op.op), 7,
+               op.operand0, 7, op.operand1);
   }
 }
 
@@ -628,31 +693,31 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
     Operation op = ir->items[i];
     switch (op.op) {
     case OP_MOV:
-      if (op.rep_or_jump_idx == 0) {
+      if (op.operand0 == 0) {
         // DO NOTHING
-      } else if (op.rep_or_jump_idx > 0) {
-        da_append(code, add_idx(op.rep_or_jump_idx));
+      } else if (op.operand0 > 0) {
+        da_append(code, add_idx(op.operand0));
       } else {
-        da_append(code, sub_idx(-op.rep_or_jump_idx));
+        da_append(code, sub_idx(-op.operand0));
       }
       break;
 
     case OP_ADD:
-      if ((0xFF & op.rep_or_jump_idx) != 0) {
+      if ((0xFF & op.operand0) != 0) {
         da_append(code, ld_tape(0));
-        da_append(code, add(0, 0, (0xFF & op.rep_or_jump_idx)));
+        da_append(code, add(0, 0, (0xFF & op.operand0)));
         da_append(code, str_tape(0));
       }
       break;
 
     case OP_PCH:
-      for (ptrdiff_t j = 0; j < op.rep_or_jump_idx; j++) {
+      for (ptrdiff_t j = 0; j < op.operand0; j++) {
         da_append(code, ld_tape(0));
         da_append(code, blr_putc());
       }
       break;
     case OP_GCH:
-      for (ptrdiff_t j = 0; j < op.rep_or_jump_idx; j++) {
+      for (ptrdiff_t j = 0; j < op.operand0; j++) {
         da_append(code, blr_getc());
       }
       da_append(code, str_tape(0));
@@ -663,7 +728,7 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
       da_append(code, cbz(0));
       Loop_Entry pair = {
           .enter_loop_irop = i + 1,
-          .exit_loop_irop = op.rep_or_jump_idx,
+          .exit_loop_irop = op.operand0,
           .skip_loop_instr_idx = code->count - 1,
       };
       da_append(&loop_list, pair);
@@ -674,7 +739,7 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
       da_append(code, cbnz(0));
 
       Loop_Entry loop_entry = da_pop(&loop_list);
-      NOB_ASSERT(loop_entry.enter_loop_irop == (ptrdiff_t)(op.rep_or_jump_idx));
+      NOB_ASSERT(loop_entry.enter_loop_irop == (ptrdiff_t)(op.operand0));
       NOB_ASSERT(loop_entry.exit_loop_irop == (ptrdiff_t)(i + 1));
 
       ptrdiff_t lower_b_idx = loop_entry.skip_loop_instr_idx;
@@ -684,6 +749,9 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
                        (upper_b_idx + 1) - lower_b_idx);
       link_cond_branch(&code->items[upper_b_idx],
                        (lower_b_idx + 1) - upper_b_idx);
+      break;
+
+    case OP_NOP:
       break;
     }
   }
@@ -871,10 +939,12 @@ int main(int argc, char **argv) {
 
   if (EMIT_IR) {
     String_Builder ir_str = {0};
-    append_ir(&ir_str, &ir);
+    sb_append_ir(&ir_str, &ir);
     sb_append_null(&ir_str);
     printf("%s", ir_str.items);
   }
+
+  ir_optimize(&ir);
 
   if (RUN_JIT) {
     Instructions code = {0};
