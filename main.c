@@ -879,12 +879,13 @@ void print_usage(char *pname) {
   fprintf(stderr, "   --optimize       -o     optimize code\n");
   fprintf(stderr, "   --stats          -s     print statistics\n");
   fprintf(stderr,
-          "   --tape-len       -t     number of pages used for tape (%zu on "
+          "   --tape-len              number of pages used for tape (%zu on "
           "this machine)\n",
           PAGE_SIZE);
   fprintf(stderr,
           "   --emit-ir        -e     emit intermediate representation\n");
   fprintf(stderr, "   --test-output           output for tests\n");
+  fprintf(stderr, "   --debug          -d     print debug output\n");
 }
 
 bool parse_size(char *s, size_t *num) {
@@ -920,35 +921,60 @@ char *parse_args(int argc, char **argv) {
     if (!(arg[0] == '-')) {
       break;
     }
-    if (strcmp(arg, "--test-output") == 0) {
-      TEST_OUTPUT = true;
-    } else if (strcmp(arg, "-i") == 0 || strcmp(arg, "--interpret-ir") == 0) {
-      RUN_JIT = false;
-      RUN_IR = true;
-    } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--stats") == 0) {
-      STATS = true;
-    } else if (strcmp(arg, "-o") == 0 || strcmp(arg, "--optimize") == 0) {
-      OPTIMIZE = true;
-    } else if (strcmp(arg, "-e") == 0 || strcmp(arg, "--emit-ir") == 0) {
-      EMIT_IR = true;
-    } else if (strcmp(arg, "-t") == 0 || strcmp(arg, "--tape-len") == 0) {
-      shift(argv, argc);
-      size_t len = 0;
-      if (argc == 0 || !parse_size(*argv, &len)) {
-        fprintf(stderr, "could not parse --tape-len/-t argument\n");
+    if (arg[1] == '-') {
+      arg += 2;
+      if (strcmp(arg, "test-output") == 0) {
+        TEST_OUTPUT = true;
+      } else if (strcmp(arg, "interpret-ir") == 0) {
+        RUN_JIT = false;
+        RUN_IR = true;
+      } else if (strcmp(arg, "stats") == 0) {
+        STATS = true;
+      } else if (strcmp(arg, "optimize") == 0) {
+        OPTIMIZE = true;
+      } else if (strcmp(arg, "emit-ir") == 0) {
+        EMIT_IR = true;
+      } else if (strcmp(arg, "debug") == 0) {
+        DEBUG_INFO = true;
+      } else if (strcmp(arg, "tape-len") == 0) {
+        shift(argv, argc);
+        size_t len = 0;
+        if (argc == 0 || !parse_size(*argv, &len)) {
+          fprintf(stderr, "could not parse --tape-len/-t argument\n");
+          exit(-1);
+        }
+        if (len == 0) {
+          fprintf(stderr, "provided tape len 0 is invalid\n");
+          exit(-1);
+        }
+        TAPE_PAGES = len;
+      } else {
+        fprintf(stderr, "unrecognized option `%s`\n", *argv);
+        print_usage(p_name);
         exit(-1);
       }
-      if (len == 0) {
-        fprintf(stderr, "provided tape len 0 is invalid\n");
-        exit(-1);
-      }
-      TAPE_PAGES = len;
     } else {
-      fprintf(stderr, "unrecognized option `%s`\n", *argv);
-      print_usage(p_name);
-      exit(-1);
+      arg++;
+      while (*arg) {
+        if (*arg == 'i') {
+          RUN_JIT = false;
+          RUN_IR = true;
+        } else if (*arg == 's') {
+          STATS = true;
+        } else if (*arg == 'o') {
+          OPTIMIZE = true;
+        } else if (*arg == 'e') {
+          EMIT_IR = true;
+        } else if (*arg == 'd') {
+          DEBUG_INFO = true;
+        } else {
+          fprintf(stderr, "unrecognized flag `%s`\n", *argv);
+          print_usage(p_name);
+          exit(-1);
+        }
+        arg++;
+      }
     }
-
     shift(argv, argc);
   }
 

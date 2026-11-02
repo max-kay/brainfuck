@@ -18,10 +18,12 @@ Run tests with `./nob test`
 ```
 Usage bf-jit FLAGS <filename.bf>
    --interpret-ir   -i     interpret ir directly
+   --optimize       -o     optimize code
    --stats          -s     print statistics
-   --tape-len       -t     number of pages used for tape (xxxx on this machine)
+   --tape-len              number of pages used for tape (xxx on this machine)
    --emit-ir        -e     emit intermediate representation
    --test-output           output for tests
+   --debug          -d     print debug output
 ```
 
 
