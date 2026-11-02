@@ -1,5 +1,8 @@
+#include <stdio.h>
 #include <string.h>
+
 #define NOB_STRIP_PREFIX
+#define NOB_NO_ECHO
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
@@ -9,33 +12,44 @@
 
 static Cmd CMD = {0};
 
-bool run_test(String_View test_name) {
+char *TEST_FLAGS[] = {
+    NULL,
+    "-o",
+    "-i",
+    "-io",
+};
+
+#define T_FLAG_COUNT (sizeof(TEST_FLAGS) / sizeof(char *))
+
+bool run_test(String_View test_name, String_Builder *test_log) {
   size_t alloc_mark = temp_save();
   String_Builder sb_expected = {0};
   String_Builder output = {0};
-  bool test_passed = false;
+  bool test_passed = true;
 
   char *path_expected =
       temp_sprintf("%s/" SV_Fmt ".expected", TEST_PATH, SV_Arg(test_name));
   if (!file_exists(path_expected)) {
     nob_log(ERROR, "could not find expected output for test " SV_Fmt,
             SV_Arg(test_name));
-    goto tail;
+    exit(-1);
   }
 
   if (!read_entire_file(path_expected, &sb_expected)) {
-    goto tail;
+    nob_log(ERROR, "could not read expected output for test " SV_Fmt,
+            SV_Arg(test_name));
+    exit(-1);
   };
 
   String_View expected_output = sb_to_sv(sb_expected);
   bool should_fail = sv_chop_prefix(&expected_output, SVLIT("SHOULD FAIL\n"));
 
-  char *stdout_path =
-      temp_sprintf("/tmp/bf_test_" SV_Fmt ".stdout", SV_Arg(test_name));
+  char *stdout_path = temp_sprintf("%s/bf_test_" SV_Fmt ".stdout", TEST_PATH,
+                                   SV_Arg(test_name));
   char *stderr_path = NULL;
   if (should_fail) {
-    stderr_path =
-        temp_sprintf("/tmp/bf_test_" SV_Fmt ".stderr", SV_Arg(test_name));
+    stderr_path = temp_sprintf("%s/bf_test_" SV_Fmt ".stderr", TEST_PATH,
+                               SV_Arg(test_name));
   }
 
   char *input_path =
@@ -45,48 +59,77 @@ bool run_test(String_View test_name) {
     input_path = NULL;
   }
 
-  cmd_append(&CMD, BIN_PATH, "--test-output",
-             temp_sprintf("%s/" SV_Fmt ".bf", TEST_PATH, SV_Arg(test_name)));
+  test_log->count = 0;
+  sb_appendf(test_log, "\033[1;31mTest `" SV_Fmt "` failed!\033[0m\n",
+             SV_Arg(test_name));
+  for (int flag_idx = 0; flag_idx < T_FLAG_COUNT; flag_idx++) {
+    char *flags = TEST_FLAGS[flag_idx];
+    cmd_append(&CMD, BIN_PATH, "--test-output");
+    if (flags) {
+      cmd_append(&CMD, flags);
+    }
+    cmd_append(&CMD,
+               temp_sprintf("%s/" SV_Fmt ".bf", TEST_PATH, SV_Arg(test_name)));
 
-  bool cmd_failed =
-      !cmd_run(&CMD, .stdin_path = input_path, .stdout_path = stdout_path,
-               .stderr_path = stderr_path);
+    bool cmd_failed =
+        !cmd_run(&CMD, .stdin_path = input_path, .stdout_path = stdout_path,
+                 .stderr_path = stderr_path);
 
-  if (!read_entire_file(stdout_path, &output)) {
-    nob_log(WARNING, "could not read output of test " SV_Fmt,
-            SV_Arg(test_name));
-    goto tail;
-  }
+    if (!read_entire_file(stdout_path, &output)) {
+      nob_log(WARNING, "could not read output of test " SV_Fmt,
+              SV_Arg(test_name));
+      exit(-1);
+    }
 
-  if (should_fail) {
-    if (!cmd_failed) {
-      goto tail;
+    char *reason = NULL;
+    if (should_fail) {
+      if (!cmd_failed) {
+        reason = "should fail but did not\n";
+      } else {
+        output.count = 0;
+        if (!read_entire_file(stderr_path, &output)) {
+          nob_log(WARNING, "could not read err output of test " SV_Fmt,
+                  SV_Arg(test_name));
+          exit(-1);
+        }
+      }
     } else {
-      output.count = 0;
-      if (!read_entire_file(stderr_path, &output)) {
-        nob_log(WARNING, "could not read err output of test " SV_Fmt,
-                SV_Arg(test_name));
-        goto tail;
+      if (cmd_failed) {
+        reason = "should not fail but did\n";
       }
     }
-  } else {
-    if (cmd_failed) {
-      goto tail;
+    if (!reason &&
+        (expected_output.count != output.count ||
+         memcmp(output.items, expected_output.items, output.count) != 0)) {
+      reason = temp_sprintf("wrong output\n"
+                            "expected output:\n" SV_Fmt "\n"
+                            "output:\n" SV_Fmt "\n",
+                            SV_Arg(expected_output), SV_Arg(sb_to_sv(output)));
+    }
+
+    if (reason) {
+      if (flags) {
+        sb_appendf(test_log, "flags: %s\n", flags);
+      } else {
+        sb_appendf(test_log, "no flags\n");
+      }
+      sb_appendf(test_log, "%s\n", reason);
+      test_passed = false;
+    }
+
+    if (!delete_file(stdout_path)) {
+      nob_log(ERROR, "could not delete file: %s\n", stdout_path);
+      exit(-1);
+    }
+    output.count = 0;
+    if (stderr_path) {
+      if (!delete_file(stderr_path)) {
+        nob_log(ERROR, "could not delete file: %s\n", stderr_path);
+        exit(-1);
+      }
     }
   }
-  if (expected_output.count != output.count ||
-      strncmp(output.items, expected_output.items, output.count) != 0) {
-    nob_log(ERROR,
-            "test " SV_Fmt " failed\n"
-            "  expected `" SV_Fmt "`\n"
-            "  got `" SV_Fmt "`\n",
-            SV_Arg(test_name), SV_Arg(expected_output),
-            SV_Arg(sb_to_sv(output)));
-    goto tail;
-  }
-  test_passed = true;
 
-tail:
   temp_rewind(alloc_mark);
   da_free(sb_expected);
   da_free(output);
@@ -94,23 +137,26 @@ tail:
 }
 
 bool run_all_tests() {
-  nob_log(INFO, "running tests");
   File_Paths paths = {0};
   read_entire_dir(TEST_PATH, &paths);
 
   bool had_no_failure = true;
 
+  String_Builder test_log = {0};
+
   for (size_t i = 0; i < paths.count; i++) {
     String_View name = sv_from_cstr(paths.items[i]);
     if (!sv_chop_suffix(&name, SVLIT(".bf")))
       continue;
-    if (!run_test(name)) {
-      nob_log(ERROR, "test " SV_Fmt " failed!", SV_Arg(name));
+
+    if (!run_test(name, &test_log)) {
+      printf(SV_Fmt, SV_Arg(sb_to_sv(test_log)));
       had_no_failure = false;
     }
   }
 
   da_free(paths);
+  sb_free(test_log);
   return had_no_failure;
 }
 
@@ -118,23 +164,38 @@ int main(int argc, char **argv) {
   GO_REBUILD_URSELF(argc, argv);
 
   bool run_tests = false;
+  bool debug = false;
   shift(argv, argc);
   while (argc > 0) {
-    if (strcmp(*argv, "test") == 0)
+    if (strcmp(*argv, "test") == 0) {
       run_tests = true;
+    } else if (strcmp(*argv, "debug") == 0) {
+      debug = true;
+    } else {
+      nob_log(ERROR, "unrecognized option %s", *argv);
+      return -1;
+    }
+
     shift(argv, argc);
   }
 
-  cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Werror", "-o", BIN_PATH, "-O3",
-             "main.c");
+  cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Werror", "-o", BIN_PATH);
+  if (debug) {
+    cmd_append(&CMD, "-O0", "-g");
+  } else {
+    cmd_append(&CMD, "-O3");
+  }
+  cmd_append(&CMD, "main.c");
+
   if (!cmd_run(&CMD))
     return 1;
 
   if (run_tests) {
+    printf("running tests\n");
     if (!run_all_tests()) {
       return -1;
     } else {
-      nob_log(INFO, "all tests passed");
+      printf("\033[32mall tests passed\033[0m\n");
     }
   }
 
