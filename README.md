@@ -11,7 +11,9 @@ To bootstrap `nob` run `cc -o nob nob.c`.
 
 Build the project using `./nob`, this also rebuilds `nob` if necessary.
 
-Run tests with `./nob test`
+Run tests with `./nob test`.
+
+To compile with debug symbols run `./nob debug`.
 
 ## Usage
 
