@@ -78,6 +78,8 @@ static bool RUN_JIT = true;
 static bool RUN_IR = false;
 static bool STATS = false;
 static bool EMIT_IR = false;
+static bool OPTIMIZE = false;
+static bool DEBUG_INFO = false;
 static size_t TAPE_PAGES = 1;
 
 static size_t PAGE_SIZE = 0;
@@ -284,6 +286,7 @@ Token get_next(String_View *sv) {
 }
 
 typedef enum {
+  OP_NOP = 0,
   // operand0 signed amout to move
   OP_MOV,
   // operand0 amount to add
@@ -293,11 +296,10 @@ typedef enum {
   OP_PCH,
   // operand0 repetitions
   OP_GCH,
-  // operand0 exit loop ir idx
+  // no operands
   OP_LSTART,
-  // operand0 start loop ir idx
+  // no operands
   OP_LEND,
-  OP_NOP,
 } OpCode;
 
 typedef struct {
@@ -340,26 +342,26 @@ typedef struct {
 } Index_Array;
 
 bool parse_bf(String_View iter, Intermediate *ir) {
-  Index_Array idxs = {0};
-
+  size_t open_loops = 0;
+  Token token;
+  Operation operation;
   while (true) {
-    Token token = get_next(&iter);
-    Operation current_op = {0};
+    token = get_next(&iter);
+    operation = (Operation){0};
     switch (token) {
     case TOK_JUMP_FORWARD:
-      current_op = (Operation){.op = OP_LSTART, .operand0 = 0};
-      da_append(ir, current_op);
-      da_append(&idxs, ir->count);
+      operation = (Operation){.op = OP_LSTART};
+      da_append(ir, operation);
+      open_loops++;
       break;
 
     case TOK_JUMP_BACKWARD:
-      if (idxs.count == 0) {
+      if (open_loops == 0) {
         goto error;
       }
-      size_t last_idx = da_pop(&idxs);
-      current_op = (Operation){.op = OP_LEND, .operand0 = last_idx};
-      da_append(ir, current_op);
-      ir->items[last_idx - 1].operand0 = ir->count;
+      open_loops--;
+      operation = (Operation){.op = OP_LEND};
+      da_append(ir, operation);
       break;
 
     case TOK_START:
@@ -373,16 +375,16 @@ bool parse_bf(String_View iter, Intermediate *ir) {
       if (ir->count > 0 && da_last(ir).op == OP_ADD) {
         da_last(ir).operand0 += 1;
       } else {
-        current_op = (Operation){.op = OP_ADD, .operand0 = 1};
-        da_append(ir, current_op);
+        operation = (Operation){.op = OP_ADD, .operand0 = 1};
+        da_append(ir, operation);
       }
       break;
     case TOK_DEC:
       if (ir->count > 0 && da_last(ir).op == OP_ADD) {
         da_last(ir).operand0 -= 1;
       } else {
-        current_op = (Operation){.op = OP_ADD, .operand0 = -1};
-        da_append(ir, current_op);
+        operation = (Operation){.op = OP_ADD, .operand0 = -1};
+        da_append(ir, operation);
       }
       break;
 
@@ -390,16 +392,16 @@ bool parse_bf(String_View iter, Intermediate *ir) {
       if (ir->count > 0 && da_last(ir).op == OP_MOV) {
         da_last(ir).operand0 += 1;
       } else {
-        current_op = (Operation){.op = OP_MOV, .operand0 = 1};
-        da_append(ir, current_op);
+        operation = (Operation){.op = OP_MOV, .operand0 = 1};
+        da_append(ir, operation);
       }
       break;
     case TOK_MOVE_LEFT:
       if (ir->count > 0 && da_last(ir).op == OP_MOV) {
         da_last(ir).operand0 -= 1;
       } else {
-        current_op = (Operation){.op = OP_MOV, .operand0 = -1};
-        da_append(ir, current_op);
+        operation = (Operation){.op = OP_MOV, .operand0 = -1};
+        da_append(ir, operation);
       }
       break;
 
@@ -407,39 +409,36 @@ bool parse_bf(String_View iter, Intermediate *ir) {
       if (ir->count > 0 && da_last(ir).op == OP_PCH) {
         da_last(ir).operand0 += 1;
       } else {
-        current_op = (Operation){.op = OP_PCH, .operand0 = 1};
-        da_append(ir, current_op);
+        operation = (Operation){.op = OP_PCH, .operand0 = 1};
+        da_append(ir, operation);
       }
       break;
     case TOK_INPUT:
       if (ir->count > 0 && da_last(ir).op == OP_GCH) {
         da_last(ir).operand0 += 1;
       } else {
-        current_op = (Operation){.op = OP_GCH, .operand0 = 1};
-        da_append(ir, current_op);
+        operation = (Operation){.op = OP_GCH, .operand0 = 1};
+        da_append(ir, operation);
       }
       break;
     }
   }
 
 finish:
-  if (idxs.count != 0) {
+  if (open_loops != 0) {
     goto error;
   }
-  da_free(idxs);
   return true;
 
 error:
   ir->count = 0;
-  da_free(idxs);
   return false;
 }
 
 typedef struct {
-  Operation *start;
-  size_t len;
-  bool loop_enclosed;
-  bool has_io;
+  Operation *items;
+  size_t count;
+  bool is_basicblock;
 } Basic_Block;
 
 typedef struct {
@@ -448,12 +447,58 @@ typedef struct {
   size_t capacity;
 } BB_List;
 
-void ir_optimize(Intermediate *ir) {
-  BB_List basic_blocks = {0};
+void bb_simplify(Basic_Block block, Intermediate *ir) {
+  if (!block.is_basicblock) {
+    da_append_many(ir, block.items, block.count);
+    return;
+  }
+
+  size_t start = ir->count;
+  ptrdiff_t current_offset = 0;
+  for (size_t i = 0; i < block.count; i++) {
+    Operation op = block.items[i];
+    switch (op.op) {
+    case OP_MOV:
+      current_offset += op.operand0;
+      break;
+    case OP_ADD:
+      op.operand1 = current_offset;
+      da_append(ir, op);
+      break;
+    case OP_NOP:
+      break;
+    case OP_PCH:
+    case OP_GCH:
+    case OP_LSTART:
+    case OP_LEND:
+      UNREACHABLE("never in basic block");
+    }
+  }
+  // TODO: other sorting than bubble sort?
+  for (size_t end = ir->count; end > start; end--) {
+    bool had_swap = false;
+    for (size_t i = start; i < end - 1; i++) {
+      if (ir->items[i].operand1 > ir->items[i + 1].operand1) {
+        Operation temp = ir->items[i];
+        ir->items[i] = ir->items[i + 1];
+        ir->items[i + 1] = temp;
+        had_swap = true;
+      }
+    }
+    if (!had_swap) {
+      break;
+    }
+  }
+
+  if (current_offset != 0) {
+    Operation move = (Operation){.op = OP_MOV, .operand0 = current_offset};
+    da_append(ir, move);
+  }
+}
+
+void bb_segment(Intermediate *ir, BB_List *basic_blocks) {
   size_t current_start = 0;
 
-  bool had_io = false;
-  bool started_with_loop_start = false;
   Basic_Block block;
 
   for (size_t i = 0; i < ir->count; i++) {
@@ -461,19 +506,25 @@ void ir_optimize(Intermediate *ir) {
     switch (op.op) {
     case OP_LSTART:
     case OP_LEND:
-      block = (Basic_Block){
-          .start = &ir->items[current_start],
-          .len = i - current_start,
-          .loop_enclosed = started_with_loop_start && (op.op == OP_LEND),
-          .has_io = had_io,
-      };
-      da_append(&basic_blocks, block);
-      started_with_loop_start = (op.op == OP_LSTART);
-      had_io = false;
-      break;
     case OP_GCH:
     case OP_PCH:
-      had_io = true;
+      if (i - current_start != 0) {
+        // finish last block
+        block = (Basic_Block){
+            .items = &ir->items[current_start],
+            .count = i - current_start,
+            .is_basicblock = true,
+
+        };
+        da_append(basic_blocks, block);
+      }
+      block = (Basic_Block){
+          .items = &ir->items[i],
+          .count = 1,
+          .is_basicblock = false,
+      };
+      da_append(basic_blocks, block);
+      current_start = i + 1;
       break;
     default:
       break;
@@ -481,13 +532,61 @@ void ir_optimize(Intermediate *ir) {
   }
   if (current_start != ir->count) {
     block = (Basic_Block){
-        .start = &ir->items[current_start],
-        .has_io = had_io,
-        .loop_enclosed = false,
-        .len = ir->count - current_start,
+        .items = &ir->items[current_start],
+        .count = ir->count - current_start,
     };
-    da_append(&basic_blocks, block);
+    da_append(basic_blocks, block);
   }
+}
+
+void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
+  new_ir->count = 0;
+  BB_List basic_blocks = {0};
+
+  bb_segment(old_ir, &basic_blocks);
+  for (size_t i = 0; i < basic_blocks.count; i++) {
+    Basic_Block block = basic_blocks.items[i];
+    bb_simplify(block, new_ir);
+  }
+
+  if (DEBUG_INFO) {
+    BB_List new_basic_blocks = {0};
+
+    bb_segment(new_ir, &new_basic_blocks);
+
+    for (size_t i = 0; i < new_basic_blocks.count; i++) {
+      Basic_Block old_block = basic_blocks.items[i];
+      Basic_Block new_block = new_basic_blocks.items[i];
+      fprintf(stderr,
+              "\n__________________________"
+              "Block_%0*zu"
+              "__________________________\n",
+              6, i);
+      size_t count =
+          old_block.count > new_block.count ? old_block.count : new_block.count;
+      for (size_t j = 0; j < count; j++) {
+        if (j < old_block.count) {
+          Operation op = old_block.items[j];
+          fprintf(stderr, "%*zu: %-6s %*ld %*ld|   ", 6,
+                  ((Operation *)(&old_block.items[j]) - old_ir->items),
+                  op_as_str(op.op), 7, op.operand0, 7, op.operand1);
+        } else {
+          fprintf(stderr, "                                 ");
+        }
+
+        if (j < new_block.count) {
+          Operation op = new_block.items[j];
+          fprintf(stderr, "%*zu: %-6s %*ld %*ld\n", 6,
+                  ((Operation *)(&new_block.items[j]) - new_ir->items),
+                  op_as_str(op.op), 7, op.operand0, 7, op.operand1);
+        } else {
+          fprintf(stderr, "                             \n");
+        }
+      }
+    }
+    da_free(new_basic_blocks);
+  }
+
   da_free(basic_blocks);
 }
 
@@ -495,13 +594,13 @@ void ir_interpret(Intermediate *ir) {
   size_t instruction_ptr = 0;
   ptrdiff_t tape_ptr = 0;
   get_tape_region();
+  Index_Array jump_back = {0};
+
   while (instruction_ptr < ir->count) {
     Operation op = ir->items[instruction_ptr];
-    uint8_t tape_val = TAPE_PTR[tape_ptr];
     switch (op.op) {
     case OP_ADD:
-      tape_val += (0xFF & op.operand0);
-      TAPE_PTR[tape_ptr] = tape_val;
+      TAPE_PTR[tape_ptr + op.operand1] += op.operand0;
       instruction_ptr++;
       break;
 
@@ -517,21 +616,32 @@ void ir_interpret(Intermediate *ir) {
       break;
     case OP_PCH:
       for (ptrdiff_t i = 0; i < op.operand0; i++)
-        putchar(tape_val);
+        putchar(TAPE_PTR[tape_ptr]);
       instruction_ptr++;
       break;
 
     case OP_LSTART:
-      if (tape_val == 0) {
-        instruction_ptr = op.operand0;
+      if (TAPE_PTR[tape_ptr] == 0) {
+        size_t lstarts = 1;
+        while (lstarts != 0) {
+          instruction_ptr++;
+          if (ir->items[instruction_ptr].op == OP_LSTART) {
+            lstarts++;
+          } else if (ir->items[instruction_ptr].op == OP_LEND) {
+            lstarts--;
+          }
+        }
+        instruction_ptr++;
       } else {
         instruction_ptr++;
+        da_append(&jump_back, instruction_ptr);
       }
       break;
     case OP_LEND:
-      if (tape_val != 0) {
-        instruction_ptr = op.operand0;
+      if (TAPE_PTR[tape_ptr] != 0) {
+        instruction_ptr = da_last(&jump_back);
       } else {
+        da_pop(&jump_back);
         instruction_ptr++;
       }
       break;
@@ -546,7 +656,7 @@ void ir_interpret(Intermediate *ir) {
 void sb_append_ir(String_Builder *sb, Intermediate *ir) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
-    sb_appendf(sb, "%*zu: %-6s %*ld %*ld\n", 5, i, op_as_str(op.op), 7,
+    sb_appendf(sb, "%*zu: %-6s %*ld %*ld\n", 6, i, op_as_str(op.op), 7,
                op.operand0, 7, op.operand1);
   }
 }
@@ -616,19 +726,29 @@ static inline void link_cond_branch(instr *op, ptrdiff_t offset) {
   *op |= ((uint32_t)offset & 0x7FFFF) << 5;
 }
 
-static inline instr ld_tape(uint8_t reg) {
-  // 00111000011[xindx5][option3=011][S=0]10[xbase5][reg5]
+static inline instr ld_tape(uint8_t reg, ptrdiff_t offset) {
+  // 00111000010[imm9]00[xbase5][reg5]
   NOB_ASSERT(reg < 8);
-  instr out = ENCODE_INSTR("ldrb w0, [" TAPE_REG_STR "]");
+  if (offset > 255 || offset < -256) {
+    TODO("implement ld tape with larger offsets");
+  }
+  instr out = ENCODE_INSTR("ldurb w0, [" TAPE_REG_STR ", 0]");
   out |= reg;
+  instr off = (instr)offset & 0x1FF;
+  out |= (off << 12);
   return out;
 }
 
-static inline instr str_tape(uint8_t reg) {
-  // 00111000001[xindx5][option3=011][S=0]10[xbase5][reg5]
+static inline instr str_tape(uint8_t reg, ptrdiff_t offset) {
+  // 00111000000[imm9]00[xbase5][reg5]
   NOB_ASSERT(reg < 8);
-  instr out = ENCODE_INSTR("strb w0, [" TAPE_REG_STR "]");
+  if (offset > 255 || offset < -256) {
+    TODO("implement ld tape with larger offsets");
+  }
+  instr out = ENCODE_INSTR("sturb w0, [" TAPE_REG_STR ", 0]");
   out |= reg;
+  instr off = (instr)offset & 0x1FF;
+  out |= (off << 12);
   return out;
 }
 
@@ -664,29 +784,8 @@ ENCODE_ASM("  ldp x29, x30, [sp, 32]\n"
            "  ret\n",
            POSTLUDE_START, POSTLUDE_END);
 
-typedef struct {
-  ptrdiff_t enter_loop_irop, exit_loop_irop, skip_loop_instr_idx;
-} Loop_Entry;
-
-typedef struct {
-  Loop_Entry *items;
-  size_t count;
-  size_t capacity;
-} Loop_List;
-
-size_t ll_find(Loop_List *jl, ptrdiff_t ir_op_idx) {
-  for (size_t i = 0; i < jl->count; i++) {
-    if (jl->items[i].enter_loop_irop == ir_op_idx) {
-      return i;
-    }
-  }
-  UNREACHABLE("Loop_List is allways valid");
-}
-
 void translate_to_code(Instructions *code, Intermediate *ir) {
-  Index_Array needs_overflow_update = {0};
-  Index_Array needs_underflow_update = {0};
-  Loop_List loop_list = {0};
+  Index_Array loop_enter_idxs = {0};
   da_append_many(code, PRELUDE_START, PRELUDE_END - PRELUDE_START);
 
   for (size_t i = 0; i < ir->count; i++) {
@@ -704,15 +803,15 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
 
     case OP_ADD:
       if ((0xFF & op.operand0) != 0) {
-        da_append(code, ld_tape(0));
+        da_append(code, ld_tape(0, op.operand1));
         da_append(code, add(0, 0, (0xFF & op.operand0)));
-        da_append(code, str_tape(0));
+        da_append(code, str_tape(0, op.operand1));
       }
       break;
 
     case OP_PCH:
       for (ptrdiff_t j = 0; j < op.operand0; j++) {
-        da_append(code, ld_tape(0));
+        da_append(code, ld_tape(0, 0));
         da_append(code, blr_putc());
       }
       break;
@@ -720,29 +819,20 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
       for (ptrdiff_t j = 0; j < op.operand0; j++) {
         da_append(code, blr_getc());
       }
-      da_append(code, str_tape(0));
+      da_append(code, str_tape(0, 0));
       break;
 
     case OP_LSTART:
-      da_append(code, ld_tape(0));
+      da_append(code, ld_tape(0, 0));
       da_append(code, cbz(0));
-      Loop_Entry pair = {
-          .enter_loop_irop = i + 1,
-          .exit_loop_irop = op.operand0,
-          .skip_loop_instr_idx = code->count - 1,
-      };
-      da_append(&loop_list, pair);
+      da_append(&loop_enter_idxs, code->count - 1);
       break;
     case OP_LEND:
-      da_append(code, ld_tape(0));
+      da_append(code, ld_tape(0, 0));
       ptrdiff_t upper_b_idx = (ptrdiff_t)code->count;
       da_append(code, cbnz(0));
 
-      Loop_Entry loop_entry = da_pop(&loop_list);
-      NOB_ASSERT(loop_entry.enter_loop_irop == (ptrdiff_t)(op.operand0));
-      NOB_ASSERT(loop_entry.exit_loop_irop == (ptrdiff_t)(i + 1));
-
-      ptrdiff_t lower_b_idx = loop_entry.skip_loop_instr_idx;
+      ptrdiff_t lower_b_idx = da_pop(&loop_enter_idxs);
 
       // link the branches
       link_cond_branch(&code->items[lower_b_idx],
@@ -756,10 +846,6 @@ void translate_to_code(Instructions *code, Intermediate *ir) {
     }
   }
   da_append_many(code, POSTLUDE_START, POSTLUDE_END - POSTLUDE_START);
-
-  da_free(needs_underflow_update);
-  da_free(needs_overflow_update);
-  da_free(loop_list);
 }
 
 void run_on_jit(Instructions *code) {
@@ -790,6 +876,7 @@ void run_on_jit(Instructions *code) {
 void print_usage(char *pname) {
   fprintf(stderr, "Usage %s FLAGS <filename.bf>\n", pname);
   fprintf(stderr, "   --interpret-ir   -i     interpret ir directly\n");
+  fprintf(stderr, "   --optimize       -o     optimize code\n");
   fprintf(stderr, "   --stats          -s     print statistics\n");
   fprintf(stderr,
           "   --tape-len       -t     number of pages used for tape (%zu on "
@@ -840,6 +927,8 @@ char *parse_args(int argc, char **argv) {
       RUN_IR = true;
     } else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--stats") == 0) {
       STATS = true;
+    } else if (strcmp(arg, "-o") == 0 || strcmp(arg, "--optimize") == 0) {
+      OPTIMIZE = true;
     } else if (strcmp(arg, "-e") == 0 || strcmp(arg, "--emit-ir") == 0) {
       EMIT_IR = true;
     } else if (strcmp(arg, "-t") == 0 || strcmp(arg, "--tape-len") == 0) {
@@ -937,14 +1026,33 @@ int main(int argc, char **argv) {
     fprintf(stderr, "\n");
   }
 
+  if (OPTIMIZE) {
+    Intermediate new_ir = {0};
+
+    start = clock();
+    ir_optimize(&ir, &new_ir);
+    end = clock();
+    if (STATS) {
+      fprintf(stderr, "\n");
+      fprintf(stderr, "Optimized IR\n");
+      fprintf(stderr, "  ran for ");
+      pprint_clock(end - start);
+      fprintf(stderr, "\n");
+      fprintf(stderr, "old instruction count: %*zu\n", 6, ir.count);
+      fprintf(stderr, "new instruction count: %*zu\n", 6, new_ir.count);
+      fprintf(stderr, "\n");
+    }
+
+    swap(Intermediate, ir, new_ir);
+    da_free(new_ir);
+  }
+
   if (EMIT_IR) {
     String_Builder ir_str = {0};
     sb_append_ir(&ir_str, &ir);
     sb_append_null(&ir_str);
     printf("%s", ir_str.items);
   }
-
-  ir_optimize(&ir);
 
   if (RUN_JIT) {
     Instructions code = {0};

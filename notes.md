@@ -7,14 +7,21 @@ on nonreadable run cli arg command
 ## ARM instructions
 https://www.scs.stanford.edu/~zyedidia/arm64/index.html
 
-## optimization thoughts
-be carefull about wrapped w0 when optimizing away reads
-syscalls for putc and getc
+## IR optimization
+
 
 example optimizations
 http://calmerthanyouare.org/2015/01/07/optimizing-brainfuck.html
 (no https)
 
+## Aarch64 optimizations
+be carefull about wrapped w0 when optimizing away reads
+
+syscalls for putc and getc? probably doesnt make sense
+
+the last strb instruction can be combine with the last instruction to move the pointer
+
+## runtime optimizations
 with explicit bound checks
 Benchmark 1: ./bf-jit-old examples/mandelbrot.bf (10 runs) commit 759d9f1
                 mean     ±       σ          min     …     max
