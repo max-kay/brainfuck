@@ -82,12 +82,12 @@ If n < 0
   sub xtape, xtape, -n
 ```
 
-### (`ADD`, n)
+### (`ADD`, n, o)
 If n != 0
 ```asm
-  ldrb w0, [xtape]
+  ldurb w0, [xtape, o]
   add w1, w0, (n % 256)
-  strb w1, [xtape]
+  sturb w1, [xtape, o]
 ```
 
 ### (`LSTART`, a)
@@ -115,6 +115,15 @@ repeated n times
   strb w0, [xtape]
 ```
 repeated n times
+
+## Canonicalization of Basic Blocks
+
+A basic block is a segment of IR which does not contain any of `LSTART`, `LEND`, `PCH`, or `GCH`.
+The `MOV` operations are collected and put at the end of a basic block
+and the offsets to the arithmetic operations are updated accordingly.
+Additionally the arithmetic operations are sorted by the offset to which they are applied,
+such that arithmetic operations on the same value can be combined.
+
 
 ## Underflow and Overflow handling
 Underflows and overflows are handled by the operating system.
