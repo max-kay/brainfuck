@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <setjmp.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -17,8 +16,6 @@
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
-Bf_Result RESULT = Bf_R_Ok;
-
 // COMMANDLINE CONFIG
 static bool TEST_OUTPUT = false;
 static bool RUN_JIT = true;
@@ -29,19 +26,7 @@ static bool OPTIMIZE = false;
 static bool DEBUG_INFO = false;
 static size_t TAPE_PAGES = 1;
 
-static struct termios orig_termios;
-
-static inline void init_terminal(void) {
-  struct termios raw;
-  tcgetattr(STDIN_FILENO, &orig_termios);
-  raw = orig_termios;
-  raw.c_lflag &= ~(ICANON);
-  tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-}
-
-static inline void reset_terminal(void) {
-  tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
-}
+Bf_Result RESULT = Bf_R_Ok;
 
 void print_result(void) {
   switch (RESULT) {
@@ -77,6 +62,20 @@ void print_result(void) {
     }
     break;
   }
+}
+
+static struct termios orig_termios;
+
+static inline void init_terminal(void) {
+  struct termios raw;
+  tcgetattr(STDIN_FILENO, &orig_termios);
+  raw = orig_termios;
+  raw.c_lflag &= ~(ICANON);
+  tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+}
+
+static inline void reset_terminal(void) {
+  tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
 }
 
 typedef enum {
@@ -237,24 +236,24 @@ typedef struct {
   Operation *items;
   size_t count;
   bool is_basicblock;
-} Basic_Block;
+} Code_Segment;
 
 typedef struct {
-  Basic_Block *items;
+  Code_Segment *items;
   size_t count;
   size_t capacity;
-} BB_List;
+} CS_Array;
 
-void bb_simplify(Basic_Block block, Intermediate *ir) {
-  if (!block.is_basicblock) {
-    da_append_many(ir, block.items, block.count);
+void cs_canonicalize(Code_Segment segment, Intermediate *ir) {
+  if (!segment.is_basicblock) {
+    da_append_many(ir, segment.items, segment.count);
     return;
   }
 
   size_t start = ir->count;
   ptrdiff_t current_offset = 0;
-  for (size_t i = 0; i < block.count; i++) {
-    Operation op = block.items[i];
+  for (size_t i = 0; i < segment.count; i++) {
+    Operation op = segment.items[i];
     switch (op.op) {
     case OP_MOV:
       current_offset += op.operand0;
@@ -294,10 +293,10 @@ void bb_simplify(Basic_Block block, Intermediate *ir) {
   }
 }
 
-void bb_segment(Intermediate *ir, BB_List *basic_blocks) {
+void bb_segment(Intermediate *ir, CS_Array *segments) {
   size_t current_start = 0;
 
-  Basic_Block block;
+  Code_Segment segment;
 
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
@@ -307,21 +306,20 @@ void bb_segment(Intermediate *ir, BB_List *basic_blocks) {
     case OP_GCH:
     case OP_PCH:
       if (i - current_start != 0) {
-        // finish last block
-        block = (Basic_Block){
+        segment = (Code_Segment){
             .items = &ir->items[current_start],
             .count = i - current_start,
             .is_basicblock = true,
 
         };
-        da_append(basic_blocks, block);
+        da_append(segments, segment);
       }
-      block = (Basic_Block){
+      segment = (Code_Segment){
           .items = &ir->items[i],
           .count = 1,
           .is_basicblock = false,
       };
-      da_append(basic_blocks, block);
+      da_append(segments, segment);
       current_start = i + 1;
       break;
     default:
@@ -329,63 +327,63 @@ void bb_segment(Intermediate *ir, BB_List *basic_blocks) {
     }
   }
   if (current_start != ir->count) {
-    block = (Basic_Block){
+    segment = (Code_Segment){
         .items = &ir->items[current_start],
         .count = ir->count - current_start,
     };
-    da_append(basic_blocks, block);
+    da_append(segments, segment);
   }
 }
 
 void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
   new_ir->count = 0;
-  BB_List basic_blocks = {0};
+  CS_Array segments = {0};
 
-  bb_segment(old_ir, &basic_blocks);
-  for (size_t i = 0; i < basic_blocks.count; i++) {
-    Basic_Block block = basic_blocks.items[i];
-    bb_simplify(block, new_ir);
+  bb_segment(old_ir, &segments);
+  for (size_t i = 0; i < segments.count; i++) {
+    Code_Segment segment = segments.items[i];
+    cs_canonicalize(segment, new_ir);
   }
 
   if (DEBUG_INFO) {
-    BB_List new_basic_blocks = {0};
+    CS_Array new_segments = {0};
 
-    bb_segment(new_ir, &new_basic_blocks);
+    bb_segment(new_ir, &new_segments);
 
-    for (size_t i = 0; i < new_basic_blocks.count; i++) {
-      Basic_Block old_block = basic_blocks.items[i];
-      Basic_Block new_block = new_basic_blocks.items[i];
+    for (size_t i = 0; i < new_segments.count; i++) {
+      Code_Segment old_segment = segments.items[i];
+      Code_Segment new_segment = new_segments.items[i];
       fprintf(stderr,
-              "\n__________________________"
-              "Block_%0*zu"
-              "__________________________\n",
+              "\n_________________________"
+              "Segment%0*zu"
+              "_________________________\n",
               6, i);
-      size_t count =
-          old_block.count > new_block.count ? old_block.count : new_block.count;
+      size_t count = old_segment.count > new_segment.count ? old_segment.count
+                                                           : new_segment.count;
       for (size_t j = 0; j < count; j++) {
-        if (j < old_block.count) {
-          Operation op = old_block.items[j];
+        if (j < old_segment.count) {
+          Operation op = old_segment.items[j];
           fprintf(stderr, "%*zu: %-6s %*ld %*ld|   ", 6,
-                  ((Operation *)(&old_block.items[j]) - old_ir->items),
+                  ((Operation *)(&old_segment.items[j]) - old_ir->items),
                   op_as_str(op.op), 7, op.operand0, 7, op.operand1);
         } else {
           fprintf(stderr, "                                 ");
         }
 
-        if (j < new_block.count) {
-          Operation op = new_block.items[j];
+        if (j < new_segment.count) {
+          Operation op = new_segment.items[j];
           fprintf(stderr, "%*zu: %-6s %*ld %*ld\n", 6,
-                  ((Operation *)(&new_block.items[j]) - new_ir->items),
+                  ((Operation *)(&new_segment.items[j]) - new_ir->items),
                   op_as_str(op.op), 7, op.operand0, 7, op.operand1);
         } else {
           fprintf(stderr, "                             \n");
         }
       }
     }
-    da_free(new_basic_blocks);
+    da_free(new_segments);
   }
 
-  da_free(basic_blocks);
+  da_free(segments);
 }
 
 void ir_interpret(Intermediate *ir) {
@@ -620,13 +618,8 @@ int main(int argc, char **argv) {
   }
   init_terminal();
 
-#ifdef __APPLE__
-  if (sigsetjmp((int *)&jump_env, 1) != 0)
+  if (SETUP_FAULT_JUMP() != 0)
     goto error;
-#else  // __APPLE__
-  if (sigsetjmp(jump_env, 1) != 0)
-    goto error;
-#endif // __APPLE__
 
   Intermediate ir = {0};
 

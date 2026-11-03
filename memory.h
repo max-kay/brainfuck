@@ -9,8 +9,9 @@ extern uint8_t *TAPE_PTR;
 
 extern sigjmp_buf jump_env;
 
+#define SETUP_FAULT_JUMP() sigsetjmp(jump_env, 1)
+
 void *copy_to_jit_region(void *code, size_t size);
-void *get_jit_region(size_t size);
 void free_jit_region(void *ptr, size_t size);
 
 void get_tape_region(size_t pages);
