@@ -179,13 +179,14 @@ int main(int argc, char **argv) {
     shift(argv, argc);
   }
 
-  cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Werror", "-o", BIN_PATH);
+  cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Wstrict-prototypes", "-Werror",
+             "-o", BIN_PATH);
   if (debug) {
     cmd_append(&CMD, "-O0", "-g");
   } else {
     cmd_append(&CMD, "-O3");
   }
-  cmd_append(&CMD, "main.c");
+  cmd_append(&CMD, "main.c", "memory.c", "aarch64.c");
 
   if (!cmd_run(&CMD))
     return 1;

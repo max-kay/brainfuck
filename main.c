@@ -1,62 +1,33 @@
 #include <errno.h>
 #include <setjmp.h>
-#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/types.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
-#if defined(__APPLE__)
-#include <libkern/OSCacheControl.h>
-#include <pthread.h>
-#else  // defined(__APPLE__)
-#endif // defined(__APPLE__)
+#include "backend.h"
+#include "common.h"
+#include "memory.h"
 
 #define NOB_STRIP_PREFIX
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
-#if defined(__APPLE__)
-#define SYM(x) "_" #x // Mach-O prepends an underscore
-#else                 // defined(__APPLE__)
-#define SYM(x) #x
-#endif // defined(__APPLE__)
+Bf_Result RESULT = Bf_R_Ok;
 
-#define ENCODE_ASM(text, startptr, endptr)                                     \
-  __asm__(".text\n"                                                            \
-          ".balign 4\n"                                                        \
-          ".globl " SYM(startptr) "\n" SYM(                                    \
-              startptr) ":\n" text "\n"                                        \
-                        ".globl " SYM(endptr) "\n" SYM(endptr) ":\n");         \
-  extern const uint32_t startptr[];                                            \
-  extern const uint32_t endptr[];
-
-#define ENCODE_INSTR(insn)                                                     \
-  ({                                                                           \
-    uint32_t _enc;                                                             \
-    __asm__ volatile("b 1f\n"                                                  \
-                     "2: " insn "\n"                                           \
-                     "1: ldr %w0, 2b\n"                                        \
-                     : "=r"(_enc));                                            \
-    _enc;                                                                      \
-  })
-
-#define TAPE_REG (uint32_t)19
-#define TAPE_REG_STR "x19"
-#define UNUSED_REG (uint32_t)20
-#define UNUSED_REG_STR "x20"
-#define PUTC_REG (uint32_t)21
-#define PUTC_REG_STR "x21"
-#define GETC_REG (uint32_t)22
-#define GETC_REG_STR "x22"
-
-#define MIN_TAPE_LEN ((size_t)(1 << 12))
+// COMMANDLINE CONFIG
+static bool TEST_OUTPUT = false;
+static bool RUN_JIT = true;
+static bool RUN_IR = false;
+static bool STATS = false;
+static bool EMIT_IR = false;
+static bool OPTIMIZE = false;
+static bool DEBUG_INFO = false;
+static size_t TAPE_PAGES = 1;
 
 static struct termios orig_termios;
 
@@ -72,29 +43,7 @@ static inline void reset_terminal(void) {
   tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
 }
 
-// COMMANDLINE CONFIG
-static bool TEST_OUTPUT = false;
-static bool RUN_JIT = true;
-static bool RUN_IR = false;
-static bool STATS = false;
-static bool EMIT_IR = false;
-static bool OPTIMIZE = false;
-static bool DEBUG_INFO = false;
-static size_t TAPE_PAGES = 1;
-
-static size_t PAGE_SIZE = 0;
-
-typedef enum {
-  Bf_R_Ok = 0,
-  Bf_R_Underflow = 1,
-  Bf_R_Overflow = 2,
-  Bf_R_Could_Not_Parse,
-  Bf_R_Unknown,
-} Bf_Result;
-
-static Bf_Result RESULT = Bf_R_Ok;
-
-void print_result() {
+void print_result(void) {
   switch (RESULT) {
   case Bf_R_Ok:
     break;
@@ -129,122 +78,6 @@ void print_result() {
     break;
   }
 }
-
-static uint8_t *TAPE_PTR = NULL;
-static uint8_t *LOW_GUARD = NULL;
-static uint8_t *HIGH_GUARD = NULL;
-
-static sigjmp_buf jump_env;
-
-#if defined(__APPLE__)
-static inline void *get_jit_region(size_t size) {
-  void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-  NOB_ASSERT(ptr != MAP_FAILED);
-  return ptr;
-}
-
-static inline void free_jit_region(void *ptr, size_t size) {
-  NOB_ASSERT(munmap(ptr, size) == 0);
-}
-
-static void on_fault(int sig, siginfo_t *info, void *uctx) {
-  UNUSED(sig);
-  UNUSED(uctx);
-  if (LOW_GUARD == NULL | TAPE_PTR == NULL | HIGH_GUARD == NULL) {
-    RESULT = Bf_R_Unknown;
-    siglongjmp((int *)jump_env, 1);
-  }
-  uint8_t *addr = (uint8_t *)info->si_addr;
-  if (LOW_GUARD <= addr && addr < LOW_GUARD + PAGE_SIZE) {
-    RESULT = Bf_R_Underflow;
-  } else if (HIGH_GUARD <= addr && addr < HIGH_GUARD + PAGE_SIZE) {
-    RESULT = Bf_R_Overflow;
-  } else {
-    RESULT = Bf_R_Unknown;
-  }
-  siglongjmp((int *)jump_env, 1);
-}
-
-static inline void get_tape_region() {
-  uint8_t *base = mmap(NULL, (2 + TAPE_PAGES) * PAGE_SIZE, PROT_NONE,
-                       MAP_PRIVATE | MAP_ANON, -1, 0);
-  NOB_ASSERT(base != MAP_FAILED);
-  mprotect(base + PAGE_SIZE, TAPE_PAGES * PAGE_SIZE, PROT_READ | PROT_WRITE);
-
-  struct sigaction sa = {0};
-  sa.sa_sigaction = on_fault;
-  sa.sa_flags = SA_SIGINFO;
-  sigemptyset(&sa.sa_mask);
-  sigaction(SIGSEGV, &sa, NULL);
-  sigaction(SIGBUS, &sa, NULL); // macOS often delivers SIGBUS for these
-
-  LOW_GUARD = base;
-  HIGH_GUARD = base + (1 + TAPE_PAGES) * PAGE_SIZE;
-  TAPE_PTR = base + PAGE_SIZE;
-}
-
-static inline void free_tape_region() {
-  NOB_ASSERT(munmap(LOW_GUARD, PAGE_SIZE * (2 + TAPE_PAGES)) == 0);
-  LOW_GUARD = NULL;
-  TAPE_PTR = NULL;
-  HIGH_GUARD = NULL;
-}
-
-#else // defined(__APPLE__)
-static inline void *get_jit_region(size_t size) {
-  void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  NOB_ASSERT(ptr != MAP_FAILED);
-  return ptr;
-}
-
-static inline void free_jit_region(void *ptr, size_t size) {
-  NOB_ASSERT(munmap(ptr, size) == 0);
-}
-
-static void on_fault(int sig, siginfo_t *info, void *uctx) {
-  UNUSED(sig);
-  UNUSED(uctx);
-  if (LOW_GUARD == NULL | TAPE_PTR == NULL | HIGH_GUARD == NULL) {
-    RESULT = Bf_R_Unknown;
-    siglongjmp(jump_env, 1);
-  }
-  uint8_t *addr = (uint8_t *)info->si_addr;
-  if (LOW_GUARD <= addr && addr < LOW_GUARD + PAGE_SIZE)
-    RESULT = Bf_R_Underflow;
-  else if (HIGH_GUARD <= addr && addr < HIGH_GUARD + PAGE_SIZE)
-    RESULT = Bf_R_Overflow;
-  else
-    RESULT = Bf_R_Unknown;
-  siglongjmp(jump_env, 1);
-}
-
-static inline void get_tape_region() {
-  uint8_t *base = mmap(NULL, (2 + TAPE_PAGES) * PAGE_SIZE, PROT_NONE,
-                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  NOB_ASSERT(base != MAP_FAILED);
-  mprotect(base + PAGE_SIZE, TAPE_PAGES * PAGE_SIZE, PROT_READ | PROT_WRITE);
-
-  struct sigaction sa = {0};
-  sa.sa_sigaction = on_fault;
-  sa.sa_flags = SA_SIGINFO;
-  sigemptyset(&sa.sa_mask);
-  sigaction(SIGSEGV, &sa, NULL);
-
-  LOW_GUARD = base;
-  HIGH_GUARD = base + (1 + TAPE_PAGES) * PAGE_SIZE;
-  TAPE_PTR = base + PAGE_SIZE;
-}
-
-static inline void free_tape_region() {
-  NOB_ASSERT(munmap(LOW_GUARD, PAGE_SIZE * (2 + TAPE_PAGES)) == 0);
-  LOW_GUARD = NULL;
-  TAPE_PTR = NULL;
-  HIGH_GUARD = NULL;
-}
-
-#endif // defined(__APPLE__)
 
 typedef enum {
   TOK_MOVE_LEFT,
@@ -285,29 +118,6 @@ Token get_next(String_View *sv) {
   return TOK_END;
 }
 
-typedef enum {
-  OP_NOP = 0,
-  // operand0 signed amout to move
-  OP_MOV,
-  // operand0 amount to add
-  // operand1 offset
-  OP_ADD,
-  // operand0 repetitions
-  OP_PCH,
-  // operand0 repetitions
-  OP_GCH,
-  // no operands
-  OP_LSTART,
-  // no operands
-  OP_LEND,
-} OpCode;
-
-typedef struct {
-  OpCode op;
-  ptrdiff_t operand0;
-  ptrdiff_t operand1;
-} Operation;
-
 static inline char *op_as_str(OpCode t) {
   switch (t) {
   case OP_MOV:
@@ -328,18 +138,6 @@ static inline char *op_as_str(OpCode t) {
     UNREACHABLE("");
   }
 }
-
-typedef struct {
-  Operation *items;
-  size_t count;
-  size_t capacity;
-} Intermediate;
-
-typedef struct {
-  size_t *items;
-  size_t count;
-  size_t capacity;
-} Index_Array;
 
 bool parse_bf(String_View iter, Intermediate *ir) {
   size_t open_loops = 0;
@@ -593,7 +391,7 @@ void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
 void ir_interpret(Intermediate *ir) {
   size_t instruction_ptr = 0;
   ptrdiff_t tape_ptr = 0;
-  get_tape_region();
+  get_tape_region(TAPE_PAGES);
   Index_Array jump_back = {0};
 
   while (instruction_ptr < ir->count) {
@@ -641,7 +439,7 @@ void ir_interpret(Intermediate *ir) {
       if (TAPE_PTR[tape_ptr] != 0) {
         instruction_ptr = da_last(&jump_back);
       } else {
-        da_pop(&jump_back);
+        UNUSED(da_pop(&jump_back));
         instruction_ptr++;
       }
       break;
@@ -661,216 +459,15 @@ void sb_append_ir(String_Builder *sb, Intermediate *ir) {
   }
 }
 
-typedef uint32_t instr;
+void run_on_jit(Code code) {
+  jit_fn_type code_ptr = copy_to_jit_region(code.ptr, code.size);
 
-static inline instr add_idx(size_t n) {
-  // [sf=1]00100010[sh=0][imm12][xindx5][xindx5]
-  if (n >= (1 << 12)) {
-    TODO("allow the use of larger add using lsl 12");
-  }
-  instr out = ENCODE_INSTR("add " TAPE_REG_STR ", " TAPE_REG_STR ", 0");
-  out |= n << 10;
-  return out;
-}
+  get_tape_region(TAPE_PAGES);
 
-static inline instr sub_idx(size_t n) {
-  // [sf=1]10100010[sh=0][imm12][xindx5][xindx5]
-  if (n >= (1 << 12)) {
-    TODO("allow the use of larger sub using lsl 12");
-  }
-  instr out = ENCODE_INSTR("sub " TAPE_REG_STR ", " TAPE_REG_STR ", 0");
-  out |= n << 10;
-  return out;
-}
-
-static inline instr add(uint8_t dst, uint8_t src, size_t n) {
-  // [sf=0]00100010[sh=0][imm12][src5][dst5]
-  NOB_ASSERT(n < 1 << 12);
-  NOB_ASSERT(src < 8);
-  NOB_ASSERT(dst < 8);
-  instr out = ENCODE_INSTR("add w0, w0, 0");
-  out |= dst;
-  out |= src << 5;
-  out |= n << 10;
-  return out;
-}
-
-// static inline instr mask(uint8_t dst, uint8_t src) {
-//   instr out = ENCODE_INSTR("and w0, w0, 0xFF");
-//   NOB_ASSERT(src < 8);
-//   NOB_ASSERT(dst < 8);
-//   out |= dst;
-//   out |= src << 5;
-//   return out;
-// }
-
-static inline instr cbz(uint8_t reg) {
-  // [sf=0]0110100[imm19][reg5]
-  NOB_ASSERT(reg < 8);
-  instr out = ENCODE_INSTR("cbz w0, 0");
-  out |= reg;
-  return out;
-}
-
-static inline instr cbnz(uint8_t reg) {
-  // [sf=0]0110101[imm19][reg5]
-  NOB_ASSERT(reg < 8);
-  instr out = ENCODE_INSTR("cbnz w0, 0");
-  out |= reg;
-  return out;
-}
-
-static inline void link_cond_branch(instr *op, ptrdiff_t offset) {
-  // offset is 4 times bytelen or instruction count
-  NOB_ASSERT(offset >= -(1 << 18) && offset < (1 << 18));
-  *op |= ((uint32_t)offset & 0x7FFFF) << 5;
-}
-
-static inline instr ld_tape(uint8_t reg, ptrdiff_t offset) {
-  // 00111000010[imm9]00[xbase5][reg5]
-  NOB_ASSERT(reg < 8);
-  if (offset > 255 || offset < -256) {
-    TODO("implement ld tape with larger offsets");
-  }
-  instr out = ENCODE_INSTR("ldurb w0, [" TAPE_REG_STR ", 0]");
-  out |= reg;
-  instr off = (instr)offset & 0x1FF;
-  out |= (off << 12);
-  return out;
-}
-
-static inline instr str_tape(uint8_t reg, ptrdiff_t offset) {
-  // 00111000000[imm9]00[xbase5][reg5]
-  NOB_ASSERT(reg < 8);
-  if (offset > 255 || offset < -256) {
-    TODO("implement ld tape with larger offsets");
-  }
-  instr out = ENCODE_INSTR("sturb w0, [" TAPE_REG_STR ", 0]");
-  out |= reg;
-  instr off = (instr)offset & 0x1FF;
-  out |= (off << 12);
-  return out;
-}
-
-static inline instr blr_putc() { return ENCODE_INSTR("blr " PUTC_REG_STR); }
-
-static inline instr blr_getc() { return ENCODE_INSTR("blr " GETC_REG_STR); }
-
-typedef struct {
-  instr *items;
-  size_t count;
-  size_t capacity;
-} Instructions;
-
-typedef int (*putchar_type)(int);
-typedef int (*getchar_type)(void);
-typedef void (*jit_fn_type)(uint8_t *, putchar_type, getchar_type);
-
-ENCODE_ASM("  sub sp, sp, 48\n"
-           "  stp x29, x30, [sp, 32]\n"
-           "  mov x29, sp\n"
-           "  stp " TAPE_REG_STR ", " UNUSED_REG_STR ", [sp, 16]\n"
-           "  stp " PUTC_REG_STR ", " GETC_REG_STR ", [sp]\n"
-           // "  mov " INDEX_REG_STR ", xzr\n"
-           "  mov " TAPE_REG_STR ", x0\n"
-           "  mov " PUTC_REG_STR ", x1\n"
-           "  mov " GETC_REG_STR ", x2\n",
-           PRELUDE_START, PRELUDE_END);
-
-ENCODE_ASM("  ldp x29, x30, [sp, 32]\n"
-           "  ldp " TAPE_REG_STR ", " UNUSED_REG_STR ", [sp, 16]\n"
-           "  ldp " PUTC_REG_STR ", " GETC_REG_STR ", [sp]\n"
-           "  add sp, sp, 48\n"
-           "  ret\n",
-           POSTLUDE_START, POSTLUDE_END);
-
-void translate_to_code(Instructions *code, Intermediate *ir) {
-  Index_Array loop_enter_idxs = {0};
-  da_append_many(code, PRELUDE_START, PRELUDE_END - PRELUDE_START);
-
-  for (size_t i = 0; i < ir->count; i++) {
-    Operation op = ir->items[i];
-    switch (op.op) {
-    case OP_MOV:
-      if (op.operand0 == 0) {
-        // DO NOTHING
-      } else if (op.operand0 > 0) {
-        da_append(code, add_idx(op.operand0));
-      } else {
-        da_append(code, sub_idx(-op.operand0));
-      }
-      break;
-
-    case OP_ADD:
-      if ((0xFF & op.operand0) != 0) {
-        da_append(code, ld_tape(0, op.operand1));
-        da_append(code, add(0, 0, (0xFF & op.operand0)));
-        da_append(code, str_tape(0, op.operand1));
-      }
-      break;
-
-    case OP_PCH:
-      for (ptrdiff_t j = 0; j < op.operand0; j++) {
-        da_append(code, ld_tape(0, 0));
-        da_append(code, blr_putc());
-      }
-      break;
-    case OP_GCH:
-      for (ptrdiff_t j = 0; j < op.operand0; j++) {
-        da_append(code, blr_getc());
-      }
-      da_append(code, str_tape(0, 0));
-      break;
-
-    case OP_LSTART:
-      da_append(code, ld_tape(0, 0));
-      da_append(code, cbz(0));
-      da_append(&loop_enter_idxs, code->count - 1);
-      break;
-    case OP_LEND:
-      da_append(code, ld_tape(0, 0));
-      ptrdiff_t upper_b_idx = (ptrdiff_t)code->count;
-      da_append(code, cbnz(0));
-
-      ptrdiff_t lower_b_idx = da_pop(&loop_enter_idxs);
-
-      // link the branches
-      link_cond_branch(&code->items[lower_b_idx],
-                       (upper_b_idx + 1) - lower_b_idx);
-      link_cond_branch(&code->items[upper_b_idx],
-                       (lower_b_idx + 1) - upper_b_idx);
-      break;
-
-    case OP_NOP:
-      break;
-    }
-  }
-  da_append_many(code, POSTLUDE_START, POSTLUDE_END - POSTLUDE_START);
-}
-
-void run_on_jit(Instructions *code) {
-  void *code_ptr = get_jit_region(code->count * sizeof(code->items[0]));
-
-#if defined(__APPLE__)
-  pthread_jit_write_protect_np(0);
-#endif // defined(__APPLE__)
-
-  memcpy(code_ptr, code->items, code->count * sizeof(code->items[0]));
-
-#if defined(__APPLE__)
-  pthread_jit_write_protect_np(1);
-  sys_icache_invalidate(code_ptr, code->count * sizeof(code->items[0]));
-#else  // defined(__APPLE__)
-  __builtin___clear_cache(code_ptr, (char *)code_ptr +
-                                        code->count * sizeof(code->items[0]));
-#endif // defined(__APPLE__)
-
-  get_tape_region();
-
-  ((jit_fn_type)code_ptr)(TAPE_PTR, putchar, getchar);
+  code_ptr(TAPE_PTR, putchar, getchar);
 
   free_tape_region();
-  free_jit_region(code_ptr, code->count * sizeof(code->items[0]));
+  free_jit_region(code_ptr, code.size);
 }
 
 void print_usage(char *pname) {
@@ -879,9 +476,9 @@ void print_usage(char *pname) {
   fprintf(stderr, "   --optimize       -o     optimize code\n");
   fprintf(stderr, "   --stats          -s     print statistics\n");
   fprintf(stderr,
-          "   --tape-len              number of pages used for tape (%zu on "
-          "this machine)\n",
-          PAGE_SIZE);
+          "   --tape-len              number of pages used for tape (pagesize: "
+          "%d on this machine)\n",
+          getpagesize());
   fprintf(stderr,
           "   --emit-ir        -e     emit intermediate representation\n");
   fprintf(stderr, "   --test-output           output for tests\n");
@@ -1006,9 +603,8 @@ void pprint_clock(clock_t elapsed) {
 }
 
 int main(int argc, char **argv) {
-  PAGE_SIZE = sysconf(_SC_PAGESIZE);
-  if ((PAGE_SIZE & ((1 << 12) - 1)) != 0) {
-    fprintf(stderr, "unsupported page size %zu\n", PAGE_SIZE);
+  if ((getpagesize() & ((1 << 12) - 1)) != 0) {
+    fprintf(stderr, "unsupported page size %d\n", getpagesize());
     return -1;
   }
   char *file_name = parse_args(argc, argv);
@@ -1081,13 +677,13 @@ int main(int argc, char **argv) {
   }
 
   if (RUN_JIT) {
-    Instructions code = {0};
     start = clock();
-    translate_to_code(&code, &ir);
+    Code code = translate_to_code(&ir);
     end = clock();
     if (STATS) {
       fprintf(stderr, "JIT compilation\n");
-      fprintf(stderr, "  %zu instructions\n", code.count);
+      // TODO: only valid for aarch64
+      fprintf(stderr, "  %zu instructions\n", code.size / 4);
       fprintf(stderr, "  compiled in ");
       pprint_clock(end - start);
       fprintf(stderr, "\n");
@@ -1095,8 +691,10 @@ int main(int argc, char **argv) {
     }
 
     start = clock();
-    run_on_jit(&code);
+    run_on_jit(code);
     end = clock();
+    free(code.ptr);
+
     if (STATS) {
       fprintf(stderr, "\n");
       fprintf(stderr, "JIT program\n");
