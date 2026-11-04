@@ -28,6 +28,12 @@ typedef enum {
   // operand0 amount to add
   // operand1 offset
   OP_ADD,
+  // operand0 offset
+  OP_CLR,
+  // operand0 target_offset
+  // operand1 offset_source (factor)
+  // operand2
+  OP_MAD,
   // operand0 repetitions
   OP_PCH,
   // operand0 repetitions
@@ -36,12 +42,39 @@ typedef enum {
   OP_LSTART,
   // no operands
   OP_LEND,
-} OpCode;
+} Op_Kind;
 
 typedef struct {
-  OpCode op;
-  ptrdiff_t operand0;
-  ptrdiff_t operand1;
+  Op_Kind kind;
+  union {
+    struct {
+    } nop;
+    struct {
+      ptrdiff_t summand;
+    } mov;
+    struct {
+      ptrdiff_t summand;
+      ptrdiff_t offset;
+    } add;
+    struct {
+      ptrdiff_t offset;
+    } clr;
+    struct {
+      ptrdiff_t factor;
+      ptrdiff_t dst_offset;
+      ptrdiff_t src_offset;
+    } mad;
+    struct {
+      size_t repetitions;
+    } gch;
+    struct {
+      size_t repetitions;
+    } pch;
+    struct {
+    } lstart;
+    struct {
+    } lend;
+  } as;
 } Operation;
 
 typedef struct {

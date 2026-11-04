@@ -168,33 +168,33 @@ Code translate_to_code(Intermediate *ir) {
 
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
-    switch (op.op) {
+    switch (op.kind) {
     case OP_MOV:
-      if (op.operand0 == 0) {
+      if (op.as.mov.summand == 0) {
         // DO NOTHING
-      } else if (op.operand0 > 0) {
-        da_append(&code, add_idx(op.operand0));
+      } else if (op.as.mov.summand > 0) {
+        da_append(&code, add_idx(op.as.mov.summand));
       } else {
-        da_append(&code, sub_idx(-op.operand0));
+        da_append(&code, sub_idx(-op.as.mov.summand));
       }
       break;
 
     case OP_ADD:
-      if ((0xFF & op.operand0) != 0) {
-        da_append(&code, ld_tape(0, op.operand1));
-        da_append(&code, add(0, 0, (0xFF & op.operand0)));
-        da_append(&code, str_tape(0, op.operand1));
+      if ((0xFF & op.as.add.summand) != 0) {
+        da_append(&code, ld_tape(0, op.as.add.offset));
+        da_append(&code, add(0, 0, (0xFF & op.as.add.summand)));
+        da_append(&code, str_tape(0, op.as.add.offset));
       }
       break;
 
     case OP_PCH:
-      for (ptrdiff_t j = 0; j < op.operand0; j++) {
+      for (size_t j = 0; j < op.as.pch.repetitions; j++) {
         da_append(&code, ld_tape(0, 0));
         da_append(&code, blr_putc());
       }
       break;
     case OP_GCH:
-      for (ptrdiff_t j = 0; j < op.operand0; j++) {
+      for (size_t j = 0; j < op.as.gch.repetitions; j++) {
         da_append(&code, blr_getc());
       }
       da_append(&code, str_tape(0, 0));
@@ -220,6 +220,11 @@ Code translate_to_code(Intermediate *ir) {
       break;
 
     case OP_NOP:
+      break;
+
+    case OP_CLR:
+    case OP_MAD:
+      TODO("");
       break;
     }
   }

@@ -117,24 +117,30 @@ Token get_next(String_View *sv) {
   return TOK_END;
 }
 
-static inline char *op_as_str(OpCode t) {
-  switch (t) {
+char *op_temp_render(Operation op) {
+  switch (op.kind) {
   case OP_MOV:
-    return "MOV";
+    return temp_sprintf("MOV    %5zd %5s %5s", op.as.mov.summand, "", "");
   case OP_ADD:
-    return "ADD";
+    return temp_sprintf("ADD    %5zd %5zd %5s", op.as.add.summand,
+                        op.as.add.offset, "");
+  case OP_CLR:
+    return temp_sprintf("CLR    %5zd %5s %5s", op.as.clr.offset, "", "");
+  case OP_MAD:
+    return temp_sprintf("MAD    %5zd %5zd %5zd", op.as.mad.factor,
+                        op.as.mad.dst_offset, op.as.mad.src_offset);
   case OP_PCH:
-    return "PCH";
+    return temp_sprintf("PCH    %5zd %5s %5s", op.as.pch.repetitions, "", "");
   case OP_GCH:
-    return "GCH";
+    return temp_sprintf("GCH    %5zd %5s %5s", op.as.gch.repetitions, "", "");
   case OP_LSTART:
-    return "LSTART";
+    return "LSTART                  ";
   case OP_LEND:
-    return "LEND";
+    return "LEND                    ";
   case OP_NOP:
-    return "NOP";
+    return "NOP                     ";
   default:
-    UNREACHABLE("");
+    return NULL;
   }
 }
 
@@ -147,7 +153,7 @@ bool parse_bf(String_View iter, Intermediate *ir) {
     operation = (Operation){0};
     switch (token) {
     case TOK_JUMP_FORWARD:
-      operation = (Operation){.op = OP_LSTART};
+      operation = (Operation){.kind = OP_LSTART};
       da_append(ir, operation);
       open_loops++;
       break;
@@ -157,7 +163,7 @@ bool parse_bf(String_View iter, Intermediate *ir) {
         goto error;
       }
       open_loops--;
-      operation = (Operation){.op = OP_LEND};
+      operation = (Operation){.kind = OP_LEND};
       da_append(ir, operation);
       break;
 
@@ -169,52 +175,52 @@ bool parse_bf(String_View iter, Intermediate *ir) {
       break;
 
     case TOK_INC:
-      if (ir->count > 0 && da_last(ir).op == OP_ADD) {
-        da_last(ir).operand0 += 1;
+      if (ir->count > 0 && da_last(ir).kind == OP_ADD) {
+        da_last(ir).as.add.summand += 1;
       } else {
-        operation = (Operation){.op = OP_ADD, .operand0 = 1};
+        operation = (Operation){.kind = OP_ADD, .as.add = {.summand = 1}};
         da_append(ir, operation);
       }
       break;
     case TOK_DEC:
-      if (ir->count > 0 && da_last(ir).op == OP_ADD) {
-        da_last(ir).operand0 -= 1;
+      if (ir->count > 0 && da_last(ir).kind == OP_ADD) {
+        da_last(ir).as.add.summand -= 1;
       } else {
-        operation = (Operation){.op = OP_ADD, .operand0 = -1};
+        operation = (Operation){.kind = OP_ADD, .as.add = {.summand = -1}};
         da_append(ir, operation);
       }
       break;
 
     case TOK_MOVE_RIGHT:
-      if (ir->count > 0 && da_last(ir).op == OP_MOV) {
-        da_last(ir).operand0 += 1;
+      if (ir->count > 0 && da_last(ir).kind == OP_MOV) {
+        da_last(ir).as.mov.summand += 1;
       } else {
-        operation = (Operation){.op = OP_MOV, .operand0 = 1};
+        operation = (Operation){.kind = OP_MOV, .as.mov = {.summand = 1}};
         da_append(ir, operation);
       }
       break;
     case TOK_MOVE_LEFT:
-      if (ir->count > 0 && da_last(ir).op == OP_MOV) {
-        da_last(ir).operand0 -= 1;
+      if (ir->count > 0 && da_last(ir).kind == OP_MOV) {
+        da_last(ir).as.mov.summand += -1;
       } else {
-        operation = (Operation){.op = OP_MOV, .operand0 = -1};
+        operation = (Operation){.kind = OP_MOV, .as.mov = {.summand = -1}};
         da_append(ir, operation);
       }
       break;
 
     case TOK_OUTPUT:
-      if (ir->count > 0 && da_last(ir).op == OP_PCH) {
-        da_last(ir).operand0 += 1;
+      if (ir->count > 0 && da_last(ir).kind == OP_PCH) {
+        da_last(ir).as.pch.repetitions += 1;
       } else {
-        operation = (Operation){.op = OP_PCH, .operand0 = 1};
+        operation = (Operation){.kind = OP_PCH, .as.pch = {.repetitions = 1}};
         da_append(ir, operation);
       }
       break;
     case TOK_INPUT:
-      if (ir->count > 0 && da_last(ir).op == OP_GCH) {
-        da_last(ir).operand0 += 1;
+      if (ir->count > 0 && da_last(ir).kind == OP_GCH) {
+        operation = (Operation){.kind = OP_GCH, .as.pch = {.repetitions = 1}};
       } else {
-        operation = (Operation){.op = OP_GCH, .operand0 = 1};
+        operation = (Operation){.kind = OP_GCH, .as.gch = {.repetitions = 1}};
         da_append(ir, operation);
       }
       break;
@@ -254,13 +260,17 @@ void cs_canonicalize(Code_Segment segment, Intermediate *ir) {
   ptrdiff_t current_offset = 0;
   for (size_t i = 0; i < segment.count; i++) {
     Operation op = segment.items[i];
-    switch (op.op) {
+    switch (op.kind) {
     case OP_MOV:
-      current_offset += op.operand0;
+      current_offset += op.as.mov.summand;
       break;
     case OP_ADD:
-      op.operand1 = current_offset;
+      op.as.add.offset += current_offset;
       da_append(ir, op);
+      break;
+    case OP_CLR:
+    case OP_MAD:
+      TODO("canonicalize clr and mad");
       break;
     case OP_NOP:
       break;
@@ -271,36 +281,37 @@ void cs_canonicalize(Code_Segment segment, Intermediate *ir) {
       UNREACHABLE("never in basic block");
     }
   }
-  // TODO: other sorting than bubble sort?
-  for (size_t end = ir->count; end > start; end--) {
-    bool had_swap = false;
-    for (size_t i = start; i < end - 1; i++) {
-      if (ir->items[i].operand1 > ir->items[i + 1].operand1) {
-        Operation temp = ir->items[i];
-        ir->items[i] = ir->items[i + 1];
-        ir->items[i + 1] = temp;
-        had_swap = true;
-      }
-    }
-    if (!had_swap) {
-      break;
-    }
-  }
+  // TODO: sort in some predicable correct way
+  // for (size_t end = ir->count; end > start; end--) {
+  //   bool had_swap = false;
+  //   for (size_t i = start; i < end - 1; i++) {
+  //     // if (ir->items[i].operand1 > ir->items[i + 1].operand1) {
+  //     //   Operation temp = ir->items[i];
+  //     //   ir->items[i] = ir->items[i + 1];
+  //     //   ir->items[i + 1] = temp;
+  //     //   had_swap = true;
+  //     // }
+  //   }
+  //   if (!had_swap) {
+  //     break;
+  //   }
+  // }
 
   if (current_offset != 0) {
-    Operation move = (Operation){.op = OP_MOV, .operand0 = current_offset};
+    Operation move =
+        (Operation){.kind = OP_MOV, .as.mov.summand = current_offset};
     da_append(ir, move);
   }
 }
 
-void bb_segment(Intermediate *ir, CS_Array *segments) {
+void ir_segment(Intermediate *ir, CS_Array *segments) {
   size_t current_start = 0;
 
   Code_Segment segment;
 
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
-    switch (op.op) {
+    switch (op.kind) {
     case OP_LSTART:
     case OP_LEND:
     case OP_GCH:
@@ -339,17 +350,15 @@ void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
   new_ir->count = 0;
   CS_Array segments = {0};
 
-  bb_segment(old_ir, &segments);
+  ir_segment(old_ir, &segments);
   for (size_t i = 0; i < segments.count; i++) {
     Code_Segment segment = segments.items[i];
     cs_canonicalize(segment, new_ir);
   }
 
+  CS_Array new_segments = {0};
+  ir_segment(new_ir, &new_segments);
   if (DEBUG_INFO) {
-    CS_Array new_segments = {0};
-
-    bb_segment(new_ir, &new_segments);
-
     for (size_t i = 0; i < new_segments.count; i++) {
       Code_Segment old_segment = segments.items[i];
       Code_Segment new_segment = new_segments.items[i];
@@ -361,28 +370,30 @@ void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
       size_t count = old_segment.count > new_segment.count ? old_segment.count
                                                            : new_segment.count;
       for (size_t j = 0; j < count; j++) {
+        size_t mark = temp_save();
         if (j < old_segment.count) {
           Operation op = old_segment.items[j];
-          fprintf(stderr, "%*zu: %-6s %*ld %*ld|   ", 6,
+          fprintf(stderr, "%*zu: %s |   ", 6,
                   ((Operation *)(&old_segment.items[j]) - old_ir->items),
-                  op_as_str(op.op), 7, op.operand0, 7, op.operand1);
+                  op_temp_render(op));
         } else {
           fprintf(stderr, "                                 ");
         }
 
         if (j < new_segment.count) {
           Operation op = new_segment.items[j];
-          fprintf(stderr, "%*zu: %-6s %*ld %*ld\n", 6,
+          fprintf(stderr, "%*zu: %s\n", 6,
                   ((Operation *)(&new_segment.items[j]) - new_ir->items),
-                  op_as_str(op.op), 7, op.operand0, 7, op.operand1);
+                  op_temp_render(op));
         } else {
           fprintf(stderr, "                             \n");
         }
+        temp_rewind(mark);
       }
     }
-    da_free(new_segments);
   }
 
+  da_free(new_segments);
   da_free(segments);
 }
 
@@ -394,24 +405,34 @@ void ir_interpret(Intermediate *ir) {
 
   while (instruction_ptr < ir->count) {
     Operation op = ir->items[instruction_ptr];
-    switch (op.op) {
+    switch (op.kind) {
+    case OP_NOP:
+      break;
     case OP_ADD:
-      TAPE_PTR[tape_ptr + op.operand1] += op.operand0;
+      TAPE_PTR[tape_ptr + op.as.add.offset] += op.as.add.summand;
       instruction_ptr++;
       break;
 
+    case OP_CLR:
+      TAPE_PTR[tape_ptr + op.as.clr.offset] = 0;
+      break;
+    case OP_MAD:
+      TAPE_PTR[tape_ptr + op.as.mad.dst_offset] =
+          TAPE_PTR[tape_ptr + op.as.mad.src_offset] * op.as.mad.factor;
+      break;
+
     case OP_MOV:
-      tape_ptr += op.operand0;
+      tape_ptr += op.as.mov.summand;
       instruction_ptr++;
       break;
 
     case OP_GCH:
-      for (ptrdiff_t i = 0; i < op.operand0; i++)
+      for (size_t i = 0; i < op.as.gch.repetitions; i++)
         TAPE_PTR[tape_ptr] = getchar();
       instruction_ptr++;
       break;
     case OP_PCH:
-      for (ptrdiff_t i = 0; i < op.operand0; i++)
+      for (size_t i = 0; i < op.as.pch.repetitions; i++)
         putchar(TAPE_PTR[tape_ptr]);
       instruction_ptr++;
       break;
@@ -421,9 +442,9 @@ void ir_interpret(Intermediate *ir) {
         size_t lstarts = 1;
         while (lstarts != 0) {
           instruction_ptr++;
-          if (ir->items[instruction_ptr].op == OP_LSTART) {
+          if (ir->items[instruction_ptr].kind == OP_LSTART) {
             lstarts++;
-          } else if (ir->items[instruction_ptr].op == OP_LEND) {
+          } else if (ir->items[instruction_ptr].kind == OP_LEND) {
             lstarts--;
           }
         }
@@ -441,8 +462,6 @@ void ir_interpret(Intermediate *ir) {
         instruction_ptr++;
       }
       break;
-    case OP_NOP:
-      break;
     }
   }
 
@@ -452,8 +471,7 @@ void ir_interpret(Intermediate *ir) {
 void sb_append_ir(String_Builder *sb, Intermediate *ir) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
-    sb_appendf(sb, "%*zu: %-6s %*ld %*ld\n", 6, i, op_as_str(op.op), 7,
-               op.operand0, 7, op.operand1);
+    sb_appendf(sb, "%*zu: %s\n", 6, i, op_temp_render(op));
   }
 }
 
