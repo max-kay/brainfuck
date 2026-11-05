@@ -156,8 +156,7 @@ by which of the guard regions is accessed.
 = Translation to Aarch64 Assembly
 
 The assembly for the one brainfuck file is translated to a single function:
-`void bf_assembled(void *tape_base, int *putchar(int), int *getchar(void));`
-The return value specifies if the function exited normaly (`true`) or if an out of bounds error occurred (`false`).
+```c void bf_assembled(void *tape_base, int *putchar(int), int *getchar(void));```
 
 One register holds the tape pointer (`xtape`) throughout the whole program.
 
@@ -169,12 +168,15 @@ Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used fo
 
 == Prelude
 ```asm
-  stp fp, lr, [sp, #-48]!         ; allocate frame, save {fp, lr} at [sp, 0]
-  mov fp, sp                      ; point fp to {fp, lr} record
+  ; allocate frame, save {fp, lr} at [sp, 0]
+  stp fp, lr, [sp, -48]!
+
+  ; point fp to {fp, lr} record
+  mov fp, sp
 
   ; preserve callee preserved registers
   stp xtape, xunused, [sp, 16]
-  stp xgetc,   xputc, [sp, 32]
+  stp xputc, xgetc, [sp, 32]
 
   ; move arguments into correct registers
   mov xtape, x0
@@ -184,9 +186,12 @@ Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used fo
 
 == Postlude
 ```asm
-  ldp xgetc,   xputc, [sp, 32]
+  ; restore callee preserved registers
   ldp xtape, xunused, [sp, 16]
-  ldp fp, lr, [sp], #48           ; restore fp/lr and deallocate
+  ldp xputc, xgetc, [sp, 32]
+
+  ; restore {fp, lr} and deallocate
+  ldp fp, lr, [sp], 48
   ret
 ```
 

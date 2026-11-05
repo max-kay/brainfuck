@@ -143,21 +143,18 @@ typedef struct {
   size_t capacity;
 } Instructions;
 
-ENCODE_ASM("  sub sp, sp, 48\n"
-           "  stp x29, x30, [sp, 32]\n"
+ENCODE_ASM("  stp x29, x30, [sp, -48]!\n"
            "  mov x29, sp\n"
            "  stp " TAPE_REG_STR ", " UNUSED_REG_STR ", [sp, 16]\n"
-           "  stp " PUTC_REG_STR ", " GETC_REG_STR ", [sp]\n"
-           // "  mov " INDEX_REG_STR ", xzr\n"
+           "  stp " PUTC_REG_STR ", " GETC_REG_STR ", [sp, 32]\n"
            "  mov " TAPE_REG_STR ", x0\n"
            "  mov " PUTC_REG_STR ", x1\n"
            "  mov " GETC_REG_STR ", x2\n",
            PRELUDE_START, PRELUDE_END);
 
-ENCODE_ASM("  ldp x29, x30, [sp, 32]\n"
-           "  ldp " TAPE_REG_STR ", " UNUSED_REG_STR ", [sp, 16]\n"
-           "  ldp " PUTC_REG_STR ", " GETC_REG_STR ", [sp]\n"
-           "  add sp, sp, 48\n"
+ENCODE_ASM("  ldp " TAPE_REG_STR ", " UNUSED_REG_STR ", [sp, 16]\n"
+           "  ldp " PUTC_REG_STR ", " GETC_REG_STR ", [sp, 32]\n"
+           "  ldp x29, x30, [sp], 48\n"
            "  ret\n",
            POSTLUDE_START, POSTLUDE_END);
 
