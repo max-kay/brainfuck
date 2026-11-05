@@ -188,16 +188,12 @@ Code translate_to_code(Intermediate *ir) {
       break;
 
     case OP_PCH:
-      for (size_t j = 0; j < op.as.pch.repetitions; j++) {
-        da_append(&code, ld_tape(0, 0));
-        da_append(&code, blr_putc());
-      }
+      da_append(&code, ld_tape(0, op.as.pch.offset));
+      da_append(&code, blr_putc());
       break;
     case OP_GCH:
-      for (size_t j = 0; j < op.as.gch.repetitions; j++) {
-        da_append(&code, blr_getc());
-      }
-      da_append(&code, str_tape(0, 0));
+      da_append(&code, blr_getc());
+      da_append(&code, str_tape(0, op.as.gch.offset));
       break;
 
     case OP_LSTART:

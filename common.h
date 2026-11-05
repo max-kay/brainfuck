@@ -50,30 +50,34 @@ typedef struct {
     struct {
     } nop;
     struct {
-      ptrdiff_t summand;
+      int64_t _pad;
+      int64_t summand;
     } mov;
     struct {
-      ptrdiff_t summand;
-      ptrdiff_t offset;
+      int64_t offset;
+      int64_t summand;
     } add;
     struct {
-      ptrdiff_t offset;
+      int64_t offset;
     } clr;
     struct {
-      ptrdiff_t factor;
-      ptrdiff_t dst_offset;
-      ptrdiff_t src_offset;
+      int64_t dst_offset;
+      int64_t src_offset;
+      int64_t factor;
     } mad;
     struct {
-      size_t repetitions;
+      int64_t offset;
     } gch;
     struct {
-      size_t repetitions;
+      int64_t offset;
     } pch;
     struct {
     } lstart;
     struct {
     } lend;
+    struct {
+      int64_t offset;
+    } get_offset;
   } as;
 } Operation;
 

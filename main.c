@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -117,28 +118,38 @@ Token get_next(String_View *sv) {
   return TOK_END;
 }
 
-char *op_temp_render(Operation op) {
+static const char *fmt_off(int64_t off) {
+  return temp_sprintf("^%" PRId64, off);
+}
+
+#define OP_FMT_LEN 24
+char *op_fmt(Operation op) {
   switch (op.kind) {
   case OP_MOV:
-    return temp_sprintf("MOV    %5zd %5s %5s", op.as.mov.summand, "", "");
+    return temp_sprintf("MOV    %5" PRId64 " %5s %5s", op.as.mov.summand, "",
+                        "");
   case OP_ADD:
-    return temp_sprintf("ADD    %5zd %5zd %5s", op.as.add.summand,
-                        op.as.add.offset, "");
+    return temp_sprintf("ADD    %5s %5" PRId64 " %5s",
+                        fmt_off(op.as.add.offset), op.as.add.summand, "");
   case OP_CLR:
-    return temp_sprintf("CLR    %5zd %5s %5s", op.as.clr.offset, "", "");
+    return temp_sprintf("CLR    %5s %5s %5s", fmt_off(op.as.clr.offset), "",
+                        "");
   case OP_MAD:
-    return temp_sprintf("MAD    %5zd %5zd %5zd", op.as.mad.factor,
-                        op.as.mad.dst_offset, op.as.mad.src_offset);
+    return temp_sprintf("MAD    %5s %5s %5" PRId64,
+                        fmt_off(op.as.mad.dst_offset),
+                        fmt_off(op.as.mad.src_offset), op.as.mad.factor);
   case OP_PCH:
-    return temp_sprintf("PCH    %5zd %5s %5s", op.as.pch.repetitions, "", "");
+    return temp_sprintf("PCH    %5s %5s %5s", fmt_off(op.as.pch.offset), "",
+                        "");
   case OP_GCH:
-    return temp_sprintf("GCH    %5zd %5s %5s", op.as.gch.repetitions, "", "");
+    return temp_sprintf("GCH    %5s %5s %5s", fmt_off(op.as.gch.offset), "",
+                        "");
   case OP_LSTART:
-    return "LSTART                  ";
+    return temp_sprintf("LSTART %5s %5s %5s", "", "", "");
   case OP_LEND:
-    return "LEND                    ";
+    return temp_sprintf("LEND   %5s %5s %5s", "", "", "");
   case OP_NOP:
-    return "NOP                     ";
+    return temp_sprintf("NOP    %5s %5s %5s", "", "", "");
   default:
     return NULL;
   }
@@ -209,20 +220,12 @@ bool parse_bf(String_View iter, Intermediate *ir) {
       break;
 
     case TOK_OUTPUT:
-      if (ir->count > 0 && da_last(ir).kind == OP_PCH) {
-        da_last(ir).as.pch.repetitions += 1;
-      } else {
-        operation = (Operation){.kind = OP_PCH, .as.pch = {.repetitions = 1}};
-        da_append(ir, operation);
-      }
+      operation = (Operation){.kind = OP_PCH, .as.pch = {.offset = 0}};
+      da_append(ir, operation);
       break;
     case TOK_INPUT:
-      if (ir->count > 0 && da_last(ir).kind == OP_GCH) {
-        operation = (Operation){.kind = OP_GCH, .as.pch = {.repetitions = 1}};
-      } else {
-        operation = (Operation){.kind = OP_GCH, .as.gch = {.repetitions = 1}};
-        da_append(ir, operation);
-      }
+      operation = (Operation){.kind = OP_GCH, .as.gch = {.offset = 0}};
+      da_append(ir, operation);
       break;
     }
   }
@@ -256,11 +259,12 @@ void cs_canonicalize(Code_Segment segment, Intermediate *ir) {
     return;
   }
 
-  size_t start = ir->count;
   ptrdiff_t current_offset = 0;
   for (size_t i = 0; i < segment.count; i++) {
     Operation op = segment.items[i];
     switch (op.kind) {
+    case OP_NOP:
+      break;
     case OP_MOV:
       current_offset += op.as.mov.summand;
       break;
@@ -269,39 +273,31 @@ void cs_canonicalize(Code_Segment segment, Intermediate *ir) {
       da_append(ir, op);
       break;
     case OP_CLR:
-    case OP_MAD:
-      TODO("canonicalize clr and mad");
+      op.as.clr.offset += current_offset;
+      da_append(ir, op);
       break;
-    case OP_NOP:
+    case OP_MAD:
+      op.as.mad.dst_offset += current_offset;
+      op.as.mad.src_offset += current_offset;
+      da_append(ir, op);
       break;
     case OP_PCH:
+      op.as.pch.offset += current_offset;
+      da_append(ir, op);
+      break;
     case OP_GCH:
+      op.as.gch.offset += current_offset;
+      da_append(ir, op);
+      break;
     case OP_LSTART:
     case OP_LEND:
       UNREACHABLE("never in basic block");
     }
   }
   // TODO: sort in some predicable correct way
-  // for (size_t end = ir->count; end > start; end--) {
-  //   bool had_swap = false;
-  //   for (size_t i = start; i < end - 1; i++) {
-  //     // if (ir->items[i].operand1 > ir->items[i + 1].operand1) {
-  //     //   Operation temp = ir->items[i];
-  //     //   ir->items[i] = ir->items[i + 1];
-  //     //   ir->items[i + 1] = temp;
-  //     //   had_swap = true;
-  //     // }
-  //   }
-  //   if (!had_swap) {
-  //     break;
-  //   }
-  // }
-
-  if (current_offset != 0) {
-    Operation move =
-        (Operation){.kind = OP_MOV, .as.mov.summand = current_offset};
-    da_append(ir, move);
-  }
+  Operation move =
+      (Operation){.kind = OP_MOV, .as.mov.summand = current_offset};
+  da_append(ir, move);
 }
 
 void ir_segment(Intermediate *ir, CS_Array *segments) {
@@ -363,8 +359,8 @@ void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
       Code_Segment old_segment = segments.items[i];
       Code_Segment new_segment = new_segments.items[i];
       fprintf(stderr,
-              "\n_________________________"
-              "Segment%0*zu"
+              "\n________________________"
+              "Segment_%0*zu"
               "_________________________\n",
               6, i);
       size_t count = old_segment.count > new_segment.count ? old_segment.count
@@ -375,16 +371,16 @@ void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
           Operation op = old_segment.items[j];
           fprintf(stderr, "%*zu: %s |   ", 6,
                   ((Operation *)(&old_segment.items[j]) - old_ir->items),
-                  op_temp_render(op));
+                  op_fmt(op));
         } else {
-          fprintf(stderr, "                                 ");
+          fprintf(stderr, "%*s  %*s |   ", 6, "", OP_FMT_LEN, "");
         }
 
         if (j < new_segment.count) {
           Operation op = new_segment.items[j];
           fprintf(stderr, "%*zu: %s\n", 6,
                   ((Operation *)(&new_segment.items[j]) - new_ir->items),
-                  op_temp_render(op));
+                  op_fmt(op));
         } else {
           fprintf(stderr, "                             \n");
         }
@@ -427,13 +423,11 @@ void ir_interpret(Intermediate *ir) {
       break;
 
     case OP_GCH:
-      for (size_t i = 0; i < op.as.gch.repetitions; i++)
-        TAPE_PTR[tape_ptr] = getchar();
+      TAPE_PTR[tape_ptr + op.as.gch.offset] = getchar();
       instruction_ptr++;
       break;
     case OP_PCH:
-      for (size_t i = 0; i < op.as.pch.repetitions; i++)
-        putchar(TAPE_PTR[tape_ptr]);
+      putchar(TAPE_PTR[tape_ptr + op.as.pch.offset]);
       instruction_ptr++;
       break;
 
@@ -471,7 +465,7 @@ void ir_interpret(Intermediate *ir) {
 void sb_append_ir(String_Builder *sb, Intermediate *ir) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
-    sb_appendf(sb, "%*zu: %s\n", 6, i, op_temp_render(op));
+    sb_appendf(sb, "%*zu: %s\n", 6, i, op_fmt(op));
   }
 }
 
@@ -681,6 +675,7 @@ int main(int argc, char **argv) {
   }
 
   if (EMIT_IR) {
+    printf("\nIR for `%s`\n", file_name);
     String_Builder ir_str = {0};
     sb_append_ir(&ir_str, &ir);
     sb_append_null(&ir_str);
