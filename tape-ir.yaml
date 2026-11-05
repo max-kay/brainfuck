@@ -1,0 +1,24 @@
+%YAML 1.2
+---
+name: TapeIR
+scope: source.tapeir
+file_extensions: [tir, tapeir]
+
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.number-sign.tapeir
+
+    # `^` on its own, then the offset (number or C-like identifier) after it
+    - match: '\^'
+      scope: keyword.operator.offset.tapeir
+
+    - match: '(?<=\^)(?:-?\d+|[A-Za-z_]\w*)'
+      scope: variable.parameter.offset.tapeir
+
+    - match: '\b(?:ADD|MOV|LSTART|LEND|PCH|GCH|MAD|CLR)\b'
+      scope: keyword.control.tapeir
+
+    # any other number is an immediate
+    - match: '-?\d+'
+      scope: constant.numeric.integer.tapeir
