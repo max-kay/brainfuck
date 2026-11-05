@@ -23,8 +23,7 @@
 
 = Brainfuck
 
-Brainfuck is an extremely simple language.
-It operates on a tape of zero initialised unsigned bytes through a pointer to that tape.
+Brainfuck is an minimalist language operating on a tape of zero initialised unsigned bytes through a pointer to that tape.
 The tape is bounded on the left and unbounded to the right,
 although implementations usually use an upperbound for practical purposes.
 
@@ -35,16 +34,16 @@ The operations of brainfuck are shown in @bf-instructions.
     columns: 3,
     align: (center, left, left),
     [*Instruction*], [*Effect*], [*C equivalent*],
-    [`+`], [increase the value pointed at by one], [```c *t_ptr++;```],
-    [`-`], [decrease the value pointed at by one], [```c *t_ptr--;```],
+    [`+`], [increase the value pointed at by one], [```c (*t_ptr)++;```],
+    [`-`], [decrease the value pointed at by one], [```c (*t_ptr)--;```],
     [`>`], [increase the tape pointer by one], [```c t_ptr++;```],
     [`<`], [decrease the tape pointer by one], [```c t_ptr--;```],
 
     [`[`],
-    [if the value pointed at is zero goto the instruction after matching the matching `]`],
+    [if the value pointed at is zero goto the instruction after the matching `]`],
     [```c while (*t_ptr != 0) {```],
 
-    [`]`], [if the value pointed at is non zero goto the instruction after matching the matching `[`], [```c }```],
+    [`]`], [if the value pointed at is non zero goto the instruction after the matching `[`], [```c }```],
 
     [`.`], [output the byte at the tape pointer], [```c putchar(*t_ptr);```],
     [`,`], [get one byte of input and write it to the tape], [```c *t_ptr = getchar();```],
@@ -60,7 +59,7 @@ Additionally, if a program starts with `[` anything until the matching `]` can b
 = Intermediate representation
 
 The brainfuck code is first translated into an intermediate representation (IR).
-The instructions can operate on an immediate ofset to the tape pointer.
+The instructions can operate on an immediate offset to the tape pointer.
 These offsets are indicated with `^`.
 
 The operations of the IR are shown in @ir-instructions.
@@ -69,28 +68,29 @@ The operations of the IR are shown in @ir-instructions.
   table(
     columns: 3,
     align: left,
-    [*Operation*], [*Desrciption*], [*C equivalent*],
+    [*Operation*], [*Description*], [*C equivalent*],
     [```tir ADD ^off imm```], [add `imm` to the value at tape pointer + `off`], [```c *(t_ptr + off) += imm;```],
-    [```tir MOV imm```], [add `imm` to the tape pointer], [```c t_ptr += imm;```],
+    [```tir MOV imm```], [move the tape pointer by `imm`], [```c t_ptr += imm;```],
 
     [```tir LSTART```],
     [jump forward to the instruction after the matching `LEND` if the value at the tape pointer is zero],
     [```c while (*t_ptr != 0) {```],
 
     [```tir LEND```],
-    [jump backward to the instruction after the matching `LSTART` if the value at the tape pointer is nonzero],
+    [jump backward to the instruction after the matching `LSTART` if the value at the tape pointer is non-zero],
     [```c }```],
 
     [```tir PCH ^off```], [output the value at tape pointer + `off`], [```c putchar(*(t_ptr + off));```],
     [```tir GCH ^off```],
-    [get a byte of input from and write it to tape pointer + `off`],
+    [get a byte of input and write it to tape pointer + `off`],
     [```c *(t_ptr + off) = getchar();```],
 
     [```tir MAD ^dst ^src imm```],
-    [add the value calculate the value of],
+    [multiply the value at tape pointer + `src` by `imm` and add the result to the value at tape pointer + `dst`],
     [```c *(t_ptr + dst) = *(t_ptr + src) * imm;```],
 
-    [```tir CLR ^off```], [], [```c *(t_ptr + off) = 0;```],
+    [```tir CLR ^off```], [set the value at tape pointer + `off` to zero], [```c *(t_ptr + off) = 0;```],
+    [```tir NOP ```], [do nothing], [-],
   ),
   caption: [IR-Instructions],
 )<ir-instructions>
@@ -124,13 +124,13 @@ But
 ADD ^0  1
 MAD ^1 ^0 4
 ```
-`[x, y] -> [x+1, y+4*(x+1)]`
+`[x, y] -> [x+1, y + 4 * (x+1)]`
 and
 ```tir
 MAD ^1 ^0 4
 ADD ^0  1
 ```
-`[x, y] -> [x+1, y+4*x)]`
+`[x, y] -> [x+1, y + 4*x]`
 lead to different outcomes
 
 Additionally the arithmetic operations are sorted by the offset to which they are applied,
