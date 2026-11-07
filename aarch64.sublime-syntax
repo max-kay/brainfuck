@@ -1,0 +1,111 @@
+%YAML 1.2
+---
+name: AArch64 Assembly
+file_extensions: [aarch64, arm64, a64]
+scope: source.asm.aarch64
+
+variables:
+  ident: '[A-Za-z_.][A-Za-z0-9_.$]*'
+
+contexts:
+  main:
+    - include: comments
+    - include: labels
+    - include: strings
+    - include: directives
+    - include: registers
+    - include: numbers
+    - include: condition_codes
+    - include: modifiers
+    - include: instructions
+    - include: punctuation
+
+  comments:
+    - match: ';.*$'
+      scope: comment.line.semicolon.asm
+    - match: '//.*$'
+      scope: comment.line.double-slash.asm
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.asm
+      push:
+        - meta_scope: comment.block.asm
+        - match: '\*/'
+          scope: punctuation.definition.comment.end.asm
+          pop: true
+
+  labels:
+    # label definition at start of line: `foo:` or `1:`
+    - match: '^\s*({{ident}}|\d+)\s*(:)'
+      captures:
+        1: entity.name.label.asm
+        2: punctuation.separator.asm
+    # numeric local label references: 1b / 1f
+    - match: '\b\d+[bf]\b'
+      scope: entity.name.label.asm
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.asm
+      push:
+        - meta_scope: string.quoted.double.asm
+        - match: '\\.'
+          scope: constant.character.escape.asm
+        - match: '"'
+          scope: punctuation.definition.string.end.asm
+          pop: true
+
+  directives:
+    - match: '\.{{ident}}'
+      scope: keyword.other.directive.asm
+
+  registers:
+    # ---- custom register aliases: add yours here ----
+    - match: '\b(?:xtape|xputc|xgetc|xunused)\b'
+      scope: variable.language.register.alias.asm
+    # general purpose, zero and stack registers, fp/lr aliases
+    - match: '\b(?:[xw](?:[12]?[0-9]|30)|xzr|wzr|sp|wsp|fp|lr)\b'
+      scope: variable.language.register.asm
+    # SIMD / FP registers, optionally with arrangement (v0.16b, v1.4s[1])
+    - match: '\b[vqdshb](?:[12]?[0-9]|3[01])\b(?:\.\d*[bhsd])?'
+      scope: variable.language.register.simd.asm
+
+  numbers:
+    - match: '#?-?\b0[xX][0-9a-fA-F]+\b'
+      scope: constant.numeric.hex.asm
+    - match: '#?-?\b0[bB][01]+\b'
+      scope: constant.numeric.binary.asm
+    - match: '#?-?\b\d+(?:\.\d+)?\b'
+      scope: constant.numeric.decimal.asm
+
+  condition_codes:
+    - match: '\b(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al|nv)\b'
+      scope: constant.language.condition.asm
+
+  modifiers:
+    - match: '\b(?:lsl|lsr|asr|ror|msl|[us]xt[bhwx])\b'
+      scope: storage.modifier.shift.asm
+
+  instructions:
+    # conditional branch: b.eq, b.ne, ...
+    - match: '\bb\.(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al|nv)\b'
+      scope: keyword.control.branch.asm
+    # branches, calls, returns, system
+    - match: '\b(?:b|bl|br|blr|ret|cbz|cbnz|tbz|tbnz|svc|hvc|smc|brk|hlt|eret|bti|nop|yield|wfe|wfi|sev|sevl|hint|dmb|dsb|isb|mrs|msr)\b'
+      scope: keyword.control.asm
+    # loads / stores / memory
+    - match: '\b(?:ldr|ldrb|ldrh|ldrsb|ldrsh|ldrsw|ldur|ldurb|ldurh|ldursb|ldursh|ldursw|ldp|ldpsw|ldnp|ldtr|ldxr|ldxrb|ldxrh|ldxp|ldaxr|ldaxrb|ldaxrh|ldar|ldarb|ldarh|str|strb|strh|stur|sturb|sturh|stp|stnp|sttr|stxr|stxrb|stxrh|stxp|stlxr|stlr|stlrb|stlrh|ld1|ld2|ld3|ld4|st1|st2|st3|st4|ldadd|ldclr|ldeor|ldset|swp|cas|prfm|prfum)\b'
+      scope: support.function.memory.asm
+    # integer ALU, moves, bitfield, multiply/divide, conditional select
+    - match: '\b(?:add|adds|sub|subs|adc|adcs|sbc|sbcs|neg|negs|ngc|ngcs|cmp|cmn|mov|movz|movk|movn|mvn|adr|adrp|mul|mneg|madd|msub|smull|umull|smulh|umulh|smaddl|umaddl|smsubl|umsubl|sdiv|udiv|and|ands|orr|orn|eor|eon|bic|bics|tst|lsl|lsr|asr|ror|lslv|lsrv|asrv|rorv|sbfm|ubfm|bfm|sbfx|ubfx|bfi|bfxil|sbfiz|ubfiz|extr|sxtb|sxth|sxtw|uxtb|uxth|clz|cls|rbit|rev|rev16|rev32|rev64|csel|csinc|csinv|csneg|cset|csetm|cinc|cinv|cneg|ccmp|ccmn)\b'
+      scope: support.function.alu.asm
+    # scalar FP / SIMD (common subset)
+    - match: '\b(?:fadd|fsub|fmul|fdiv|fneg|fabs|fsqrt|fmadd|fmsub|fmov|fcmp|fcmpe|fcsel|fcvt|fcvtzs|fcvtzu|scvtf|ucvtf|dup|ins|umov|smov|movi|addv|addp|cmeq|cmgt|cmhi|bsl|bit|bif|tbl|ext|zip1|zip2|uzp1|uzp2|trn1|trn2)\b'
+      scope: support.function.simd.asm
+
+  punctuation:
+    - match: '[\[\]]'
+      scope: punctuation.section.brackets.asm
+    - match: '!'
+      scope: keyword.operator.writeback.asm
+    - match: ','
+      scope: punctuation.separator.comma.asm

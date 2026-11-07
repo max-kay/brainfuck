@@ -1,6 +1,61 @@
 #set heading(numbering: "1.")
 
-#set raw(syntaxes: "tape-ir.yaml")
+#set raw(syntaxes: ("tape-ir.sublime-syntax", "aarch64.sublime-syntax"))
+
+#let tape(
+  cells,
+  ptr: 0,
+  size: 4em,
+  edge: 3.4em,
+  accent: rgb("#e8590c"),
+  caret: true,
+) = {
+  let n = cells.len()
+  let gray = luma(210)
+
+  // FIXME: corner radius changes with edge
+  let left-edge = rect(
+    width: 90%,
+    height: 90%,
+    radius: (top-right: 10%, bottom-right: 10%, rest: 0pt),
+    fill: gradient.linear(white, gray, angle: 0deg),
+  )
+  let right-edge = rect(
+    width: 90%,
+    height: 90%,
+    radius: (top-left: 10%, bottom-left: 10%, rest: 0pt),
+    fill: gradient.linear(gray, white, angle: 0deg),
+  )
+
+  let cell(c, i) = {
+    let active = i == ptr
+    rect(
+      width: 90%,
+      height: 90%,
+      fill: gray,
+      radius: 10%,
+      stroke: if active { accent + 1.4pt } else { none },
+      align(center + horizon, c),
+    )
+  }
+
+  // pointer row: a caret under the active cell
+  let carets = range(n + 2).map(j => {
+    if caret and j == ptr + 1 {
+      align(center + top, text(fill: accent, size: 0.9em)[▲])
+    } else { [] }
+  })
+
+  align(center, grid(
+    columns: (edge, ..((size,) * n), edge),
+    rows: (size, auto),
+    row-gutter: 0.15em,
+    left-edge,
+    ..cells.enumerate().map(((i, c)) => cell(c, i)),
+    right-edge,
+    ..carets,
+  ))
+}
 
 // Display block code in a larger block
 // with more padding.
@@ -55,6 +110,49 @@ The operations of brainfuck are shown in @bf-instructions.
 
 Any character which does not match any of the described operations is considered a comment.
 Additionally, if a program starts with `[` anything until the matching `]` can be considered a comment.
+This second type of comment can use any character, including operations,
+with the only limmitation that `[` and `]` need to be matched.
+Since the tape is zero initialized any code written here is skipped.
+
+== Examples
+
+=== Setting a value equal to zero
+#tape(($x$,), ptr: 0)
+```
+[-]
+```
+#tape(($0$,), ptr: 0)
+
+=== Addition
+#tape(($x$, $y$), ptr: 0)
+```
+[>+<-]
+```
+#tape(($0$, $y+x$), ptr: 0)
+
+=== Addition Preserving original value
+#tape(($x$, $y$, $0$), ptr: 0)
+
+```bf
+[>+>+<<-]
+>>
+```
+
+#tape(($0$, $y+x$, $x$), ptr: 2)
+
+```bf
+[<<+>>-]
+<<
+```
+
+#tape(($x$, $y+x$, $0$), ptr: 0)
+=== Multiplication by Constant
+#tape(($x$, $y$), ptr: 0)
+```
+[>+++<-]
+```
+#tape(($0$, $y + 3x$), ptr: 0)
+
 
 = Intermediate representation
 
@@ -86,11 +184,16 @@ The operations of the IR are shown in @ir-instructions.
     [```c *(t_ptr + off) = getchar();```],
 
     [```tir MAD ^dst ^src imm```],
-    [multiply the value at tape pointer + `src` by `imm` and add the result to the value at tape pointer + `dst`],
-    [```c *(t_ptr + dst) = *(t_ptr + src) * imm;```],
+    [multiply the value at tape pointer + `src` by `imm` and add the result to the value at tape pointer + `dst`
+      `dst` is not allowed to eqaul `src`.
+    ],
+    [```c
+    *(t_ptr + dst) =
+        *(t_ptr + src) * imm;
+    ```],
 
     [```tir CLR ^off```], [set the value at tape pointer + `off` to zero], [```c *(t_ptr + off) = 0;```],
-    [```tir NOP ```], [do nothing], [-],
+    [```tir NOP ```], [do nothing], align(center)[-],
   ),
   caption: [IR-Instructions],
 )<ir-instructions>
@@ -99,43 +202,45 @@ The operations of the IR are shown in @ir-instructions.
 = Canonicalization of Basic Blocks
 
 A basic block is a segment of IR which does not contain any of `LSTART`, `LEND`.
+Canonicalization of such blocks happends in three stages.
+- collecting the `MOV`-operations into one.
+- sorting the operations
+- eliminating and combining instructions on the same offset.
+== Collecting `MOV`
 The `MOV` operations are collected and put at the end of a basic block
 and the offsets to the arithmetic and io operations are updated accordingly.
 
+== Sorting Operations
 Since the order of some instructions does not matter we can sort them.
-
-Sorting happens by insertion sort and runs until we en
 
 ```tir
 ADD ^0  1
-MAD ^0 ^1 4
+MAD ^0 ^1  4
 ```
 is the same as
 
 ```tir
-MAD ^0 ^1 4
+MAD ^0 ^1  4
 ADD ^0  1
 ```
 
-since it is just the transformation form
-`[x, y]` to `[x + 1 + 4*y, y] = [x + 4*y + 1, y]`
+since it is just the transformation from `[x, y]` to `[x + 1 + 4*y, y] = [x + 4*y + 1, y]`
+
 But
 ```tir
 ADD ^0  1
-MAD ^1 ^0 4
+MAD ^1 ^0  4
 ```
-`[x, y] -> [x+1, y + 4 * (x+1)]`
+`{..., x, y] -> [x+1, y + 4 * (x+1)]`
 and
 ```tir
-MAD ^1 ^0 4
+MAD ^1 ^0  4
 ADD ^0  1
 ```
 `[x, y] -> [x+1, y + 4*x]`
 lead to different outcomes
 
-Additionally the arithmetic operations are sorted by the offset to which they are applied,
-such that arithmetic operations on the same value can be combined.
-
+== Combining Operations
 
 = Underflow and Overflow Handling
 Underflows and overflows are handled by the operating system.
@@ -146,11 +251,12 @@ by which of the guard regions is accessed.
 
 == Limmitations
 
-1. If the memory access by brainfuck is outside the bounds by more than a region an unknown error is returned,
-  as I cannot be sure if the access was meant to access the tape.
-2. The validity of a tape address is only checked on access to a value.
-  The tape pointer is allowed to be invalid if it is never accessed.
-  The programm `<> +` does not report an underflow even though after `<` it points outside the tape region.
+If the memory access by brainfuck is outside the bounds by more than a region an unknown error is returned,
+as I cannot be sure if the access was meant to access the tape.
+
+The validity of a tape address is only checked on access to a value.
+The tape pointer is allowed to be invalid if it is never accessed.
+The programm `<> +` does not report an underflow even though after `<` it points outside the tape region.
 
 
 = Translation to Aarch64 Assembly
@@ -167,7 +273,7 @@ Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used fo
 
 
 == Prelude
-```asm
+```aarch64
   ; allocate frame, save {fp, lr} at [sp, 0]
   stp fp, lr, [sp, -48]!
 
@@ -185,7 +291,7 @@ Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used fo
 ```
 
 == Postlude
-```asm
+```aarch64
   ; restore callee preserved registers
   ldp xtape, xunused, [sp, 16]
   ldp xputc, xgetc, [sp, 32]
@@ -199,43 +305,43 @@ Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used fo
 
 == (`MOV`, n)
 If n > 0
-```asm
+```aarch64
   add xtape, xtape, n
 ```
 If n < 0
-```asm
+```aarch64
   sub xtape, xtape, -n
 ```
 
 == (`ADD`, n, o)
 If n != 0
-```asm
+```aarch64
   ldurb w0, [xtape, o]
   add w1, w0, (n % 256)
   sturb w1, [xtape, o]
 ```
 
 == (`LSTART`, a)
-```asm
+```aarch64
   ldrb w0, [xtape]
   cbz w0, offset(a)
 ```
 
 == (`LEND`, a)
-```asm
+```aarch64
   ldrb w0, [xtape]
   cbnz w0, offset(a)
 ```
 
 == (`PCH`, n)
-```asm
+```aarch64
   ldrb w0, [xtape]
   blr xputc
 ```
 repeated n times
 
 == (`GCH`, n)
-```asm
+```aarch64
   blr xgetc
   strb w0, [xtape]
 ```
