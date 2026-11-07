@@ -23,24 +23,13 @@ typedef struct {
 
 typedef enum {
   OP_NOP = 0,
-  // operand0 signed amout to move
   OP_MOV,
-  // operand0 amount to add
-  // operand1 offset
   OP_ADD,
-  // operand0 offset
   OP_CLR,
-  // operand0 target_offset
-  // operand1 offset_source (factor)
-  // operand2
   OP_MAD,
-  // operand0 repetitions
   OP_PCH,
-  // operand0 repetitions
   OP_GCH,
-  // no operands
   OP_LSTART,
-  // no operands
   OP_LEND,
 } Op_Kind;
 
@@ -61,8 +50,10 @@ typedef struct {
       int64_t offset;
     } clr;
     struct {
-      int64_t dst_offset;
+      // the placement of src_offset is important
+      // for variant get_offset
       int64_t src_offset;
+      int64_t dst_offset;
       int64_t factor;
     } mad;
     struct {
@@ -75,9 +66,7 @@ typedef struct {
     } lstart;
     struct {
     } lend;
-    struct {
-      int64_t offset;
-    } get_offset;
+    int64_t offset;
   } as;
 } Operation;
 

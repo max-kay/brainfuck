@@ -155,6 +155,105 @@ char *op_fmt(Operation op) {
   }
 }
 
+typedef struct {
+  bool has_read, has_write, has_add, io;
+  int64_t read_offset, write_offset, add_offset;
+} Footprint;
+
+static inline Footprint op_footprint(Operation op) {
+  Footprint f = {0};
+  switch (op.kind) {
+  case OP_NOP:
+    break;
+  case OP_ADD:
+    f.has_add = true;
+    f.add_offset = op.as.add.offset;
+    break;
+  case OP_CLR:
+    f.has_write = true;
+    f.write_offset = op.as.clr.offset;
+    break;
+  case OP_MAD:
+    f.has_read = true;
+    f.read_offset = op.as.mad.src_offset;
+    f.has_add = true;
+    f.add_offset = op.as.mad.dst_offset;
+    break;
+  case OP_PCH:
+    f.has_read = true;
+    f.read_offset = op.as.pch.offset;
+    f.io = true;
+    break;
+  case OP_GCH:
+    f.has_write = true;
+    f.write_offset = op.as.gch.offset;
+    f.io = true;
+    break;
+  case OP_MOV:
+    UNREACHABLE("mov instructions have no well defined footprint");
+  case OP_LSTART:
+  case OP_LEND:
+    UNREACHABLE("loop instructions have no well defined footprint");
+  }
+  return f;
+}
+
+static inline bool fp_touches(Footprint fp, int64_t offset) {
+  return (fp.has_write && fp.write_offset == offset) ||
+         (fp.has_read && fp.read_offset == offset) ||
+         (fp.has_add && fp.add_offset == offset);
+}
+
+static inline bool op_commute(Operation a, Operation b) {
+  switch (a.kind) {
+  case OP_LSTART:
+  case OP_LEND:
+  case OP_MOV:
+    return false;
+  case OP_NOP:
+    return true;
+  default:
+    break;
+  }
+  switch (b.kind) {
+  case OP_LSTART:
+  case OP_LEND:
+  case OP_MOV:
+    return false;
+  case OP_NOP:
+    return true;
+  default:
+    break;
+  }
+  Footprint fa = op_footprint(a);
+  Footprint fb = op_footprint(b);
+  if (fa.io && fb.io)
+    return false;
+  if (fa.has_write && fp_touches(fb, fa.write_offset))
+    return false;
+  if (fa.has_read && fp_touches(fb, fa.read_offset))
+    return false;
+  if (fa.has_add) {
+    if ((fb.has_write && fb.write_offset == fa.add_offset) ||
+        (fb.has_read && fb.read_offset == fa.add_offset)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool op_greater(Operation a, Operation b) {
+  if (a.kind == OP_NOP)
+    return true;
+  if (a.as.offset > b.as.offset) {
+    return true;
+  }
+  if (a.as.offset == b.as.offset) {
+    return (a.kind > b.kind);
+  }
+  return false;
+}
+
 bool parse_bf(String_View iter, Intermediate *ir) {
   size_t open_loops = 0;
   Token token;
@@ -253,12 +352,13 @@ typedef struct {
   size_t capacity;
 } CS_Array;
 
-void cs_canonicalize(Code_Segment segment, Intermediate *ir) {
+void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
   if (!segment.is_basicblock) {
-    da_append_many(ir, segment.items, segment.count);
+    da_append_many(new_ir, segment.items, segment.count);
     return;
   }
 
+  size_t start = new_ir->count;
   ptrdiff_t current_offset = 0;
   for (size_t i = 0; i < segment.count; i++) {
     Operation op = segment.items[i];
@@ -270,34 +370,50 @@ void cs_canonicalize(Code_Segment segment, Intermediate *ir) {
       break;
     case OP_ADD:
       op.as.add.offset += current_offset;
-      da_append(ir, op);
+      da_append(new_ir, op);
       break;
     case OP_CLR:
       op.as.clr.offset += current_offset;
-      da_append(ir, op);
+      da_append(new_ir, op);
       break;
     case OP_MAD:
       op.as.mad.dst_offset += current_offset;
       op.as.mad.src_offset += current_offset;
-      da_append(ir, op);
+      da_append(new_ir, op);
       break;
     case OP_PCH:
       op.as.pch.offset += current_offset;
-      da_append(ir, op);
+      da_append(new_ir, op);
       break;
     case OP_GCH:
       op.as.gch.offset += current_offset;
-      da_append(ir, op);
+      da_append(new_ir, op);
       break;
     case OP_LSTART:
     case OP_LEND:
       UNREACHABLE("never in basic block");
     }
   }
-  // TODO: sort in some predicable correct way
+  size_t end = new_ir->count;
+  for (size_t i = end; start < i; i--) {
+    bool swapped = false;
+    for (size_t j = start; j + 1 < i; j++) {
+      Operation *a = &new_ir->items[j];
+      Operation *b = &new_ir->items[j + 1];
+      if (op_greater(*a, *b) && op_commute(*a, *b)) {
+        Operation temp = *a;
+        *a = *b;
+        *b = temp;
+        swapped = true;
+      }
+    }
+    if (!swapped)
+      break;
+  }
+
   Operation move =
       (Operation){.kind = OP_MOV, .as.mov.summand = current_offset};
-  da_append(ir, move);
+  da_append(new_ir, move);
 }
 
 void ir_segment(Intermediate *ir, CS_Array *segments) {
@@ -310,8 +426,6 @@ void ir_segment(Intermediate *ir, CS_Array *segments) {
     switch (op.kind) {
     case OP_LSTART:
     case OP_LEND:
-    case OP_GCH:
-    case OP_PCH:
       if (i - current_start != 0) {
         segment = (Code_Segment){
             .items = &ir->items[current_start],
@@ -337,6 +451,7 @@ void ir_segment(Intermediate *ir, CS_Array *segments) {
     segment = (Code_Segment){
         .items = &ir->items[current_start],
         .count = ir->count - current_start,
+        .is_basicblock = true,
     };
     da_append(segments, segment);
   }
@@ -355,6 +470,7 @@ void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
   CS_Array new_segments = {0};
   ir_segment(new_ir, &new_segments);
   if (DEBUG_INFO) {
+    fprintf(stderr, "Canonicalization:\n");
     for (size_t i = 0; i < new_segments.count; i++) {
       Code_Segment old_segment = segments.items[i];
       Code_Segment new_segment = new_segments.items[i];
