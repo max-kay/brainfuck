@@ -15,7 +15,7 @@
 
 #define NOB_STRIP_PREFIX
 #define NOB_IMPLEMENTATION
-#include "nob.h"
+#include "../nob.h"
 
 // COMMANDLINE CONFIG
 static bool TEST_OUTPUT = false;

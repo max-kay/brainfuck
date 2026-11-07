@@ -6,7 +6,7 @@
 #include "backend.h"
 #include "common.h"
 
-#include "nob.h"
+#include "../nob.h"
 
 #if defined(__APPLE__)
 #define SYM(x) "_" #x // Mach-O prepends an underscore

@@ -186,7 +186,7 @@ int main(int argc, char **argv) {
   } else {
     cmd_append(&CMD, "-O3");
   }
-  cmd_append(&CMD, "main.c", "memory.c", "aarch64.c");
+  cmd_append(&CMD, "src/main.c", "src/memory.c", "src/aarch64.c");
 
   if (!cmd_run(&CMD))
     return 1;

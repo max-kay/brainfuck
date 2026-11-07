@@ -12,7 +12,7 @@
 #include "common.h"
 #include "memory.h"
 
-#include "nob.h"
+#include "../nob.h"
 
 uint8_t *TAPE_PTR = NULL;
 static uint8_t *LOW_GUARD = NULL;
