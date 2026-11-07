@@ -64,7 +64,7 @@ static inline instr sub_idx(size_t n) {
   return out;
 }
 
-static inline instr add(uint8_t dst, uint8_t src, size_t n) {
+static inline instr add_imm(uint8_t dst, uint8_t src, size_t n) {
   // [sf=0]00100010[sh=0][imm12][src5][dst5]
   NOB_ASSERT(n < 1 << 12);
   NOB_ASSERT(src < 8);
@@ -73,6 +73,21 @@ static inline instr add(uint8_t dst, uint8_t src, size_t n) {
   out |= dst;
   out |= src << 5;
   out |= n << 10;
+  return out;
+}
+
+static inline instr add_reg_lsl(uint8_t dst, uint8_t a, uint8_t b,
+                                uint8_t lsl) {
+  // [sf=0][op=0][S=0]01011[shift=00]0[Rm5][imm6=n][Rn5][Rd5]
+  NOB_ASSERT(dst < 8);
+  NOB_ASSERT(a < 8);
+  NOB_ASSERT(b < 8);
+  NOB_ASSERT(lsl < 8);
+  instr out = ENCODE_INSTR("add w0, w0, w0, lsl 0");
+  out |= (instr)dst;
+  out |= (instr)a << 5;
+  out |= (instr)lsl << 10;
+  out |= (instr)b << 16;
   return out;
 }
 
@@ -124,12 +139,31 @@ static inline instr str_tape(uint8_t reg, ptrdiff_t offset) {
   // 00111000000[imm9]00[xbase5][reg5]
   NOB_ASSERT(reg < 8);
   if (offset > 255 || offset < -256) {
-    TODO("implement ld tape with larger offsets");
+    TODO("implement str tape with larger offsets");
   }
   instr out = ENCODE_INSTR("sturb w0, [" TAPE_REG_STR ", 0]");
   out |= reg;
   instr off = (instr)offset & 0x1FF;
   out |= (off << 12);
+  return out;
+}
+
+static inline instr clear_tape(ptrdiff_t offset) {
+  // 00111000000[imm9]00[wzr5=11111][reg5]
+  if (offset > 255 || offset < -256) {
+    TODO("implement clear tape with larger offsets");
+  }
+  instr out = ENCODE_INSTR("sturb wzr, [" TAPE_REG_STR ", 0]");
+  instr off = (instr)offset & 0x1FF;
+  out |= (off << 12);
+  return out;
+}
+
+static inline instr zero_reg(uint8_t reg) {
+  // [sf=0]0101010000[wzr5=11111]00000011111[reg5];
+  NOB_ASSERT(reg < 8);
+  instr out = ENCODE_INSTR("mov w0, wzr");
+  out |= reg;
   return out;
 }
 
@@ -166,6 +200,9 @@ Code translate_to_code(Intermediate *ir) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
     switch (op.kind) {
+    case OP_NOP:
+      break;
+
     case OP_MOV:
       if (op.as.mov.summand == 0) {
         // DO NOTHING
@@ -179,7 +216,7 @@ Code translate_to_code(Intermediate *ir) {
     case OP_ADD:
       if ((0xFF & op.as.add.summand) != 0) {
         da_append(&code, ld_tape(0, op.as.add.offset));
-        da_append(&code, add(0, 0, (0xFF & op.as.add.summand)));
+        da_append(&code, add_imm(0, 0, (0xFF & op.as.add.summand)));
         da_append(&code, str_tape(0, op.as.add.offset));
       }
       break;
@@ -192,6 +229,32 @@ Code translate_to_code(Intermediate *ir) {
       da_append(&code, blr_getc());
       da_append(&code, str_tape(0, op.as.gch.offset));
       break;
+
+    case OP_CLR:
+      da_append(&code, clear_tape(op.as.clr.offset));
+      break;
+
+    case OP_MAD: {
+      uint8_t factor = (uint8_t)op.as.mad.factor & 0xFF;
+      if (factor == 0)
+        break;
+
+      // TODO: check if multiplcation using mul is faster
+      uint8_t acc = 1;
+      uint8_t tape_val = 0;
+
+      da_append(&code, ld_tape(tape_val, op.as.mad.src_offset));
+      da_append(&code, zero_reg(acc));
+      for (uint8_t lsl = 0; lsl < 8; lsl++) {
+        if ((factor >> lsl) & 1) {
+          da_append(&code, add_reg_lsl(acc, acc, tape_val, lsl));
+        }
+      }
+      da_append(&code, ld_tape(tape_val, op.as.mad.dst_offset));
+      da_append(&code, add_reg_lsl(tape_val, acc, tape_val, 0));
+      da_append(&code, str_tape(tape_val, op.as.mad.dst_offset));
+      break;
+    }
 
     case OP_LSTART:
       da_append(&code, ld_tape(0, 0));
@@ -210,14 +273,6 @@ Code translate_to_code(Intermediate *ir) {
                        (upper_b_idx + 1) - lower_b_idx);
       link_cond_branch(&code.items[upper_b_idx],
                        (lower_b_idx + 1) - upper_b_idx);
-      break;
-
-    case OP_NOP:
-      break;
-
-    case OP_CLR:
-    case OP_MAD:
-      TODO("");
       break;
     }
   }
