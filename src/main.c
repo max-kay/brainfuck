@@ -131,6 +131,9 @@ char *op_fmt(Operation op) {
   case OP_ADD:
     return temp_sprintf("ADD    %5s %5" PRId64 " %5s",
                         fmt_off(op.as.add.offset), op.as.add.summand, "");
+  case OP_NEG:
+    return temp_sprintf("NEG    %5s %5s %5s", fmt_off(op.as.neg.offset), "",
+                        "");
   case OP_CLR:
     return temp_sprintf("CLR    %5s %5s %5s", fmt_off(op.as.clr.offset), "",
                         "");
@@ -150,8 +153,15 @@ char *op_fmt(Operation op) {
     return temp_sprintf("LEND   %5s %5s %5s", "", "", "");
   case OP_NOP:
     return temp_sprintf("NOP    %5s %5s %5s", "", "", "");
-  default:
-    return NULL;
+  }
+  return NULL;
+}
+
+void sb_append_ir(String_Builder *sb, Operation *ops, size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    size_t mark = temp_save();
+    sb_appendf(sb, "%s\n", op_fmt(ops[i]));
+    temp_rewind(mark);
   }
 }
 
@@ -168,6 +178,12 @@ static inline Footprint op_footprint(Operation op) {
   case OP_ADD:
     f.has_add = true;
     f.add_offset = op.as.add.offset;
+    break;
+  case OP_NEG:
+    f.has_read = true;
+    f.read_offset = op.as.neg.offset;
+    f.has_write = true;
+    f.write_offset = op.as.neg.offset;
     break;
   case OP_CLR:
     f.has_write = true;
@@ -359,7 +375,7 @@ void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
   }
 
   size_t start = new_ir->count;
-  ptrdiff_t current_offset = 0;
+  int64_t current_offset = 0;
   for (size_t i = 0; i < segment.count; i++) {
     Operation op = segment.items[i];
     switch (op.kind) {
@@ -367,6 +383,10 @@ void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
       break;
     case OP_MOV:
       current_offset += op.as.mov.summand;
+      break;
+    case OP_NEG:
+      op.as.neg.offset += current_offset;
+      da_append(new_ir, op);
       break;
     case OP_ADD:
       op.as.add.offset += current_offset;
@@ -394,8 +414,7 @@ void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
       UNREACHABLE("never in basic block");
     }
   }
-  size_t end = new_ir->count;
-  for (size_t i = end; start < i; i--) {
+  for (size_t i = new_ir->count; start < i; i--) {
     bool swapped = false;
     for (size_t j = start; j + 1 < i; j++) {
       Operation *a = &new_ir->items[j];
@@ -410,6 +429,8 @@ void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
     if (!swapped)
       break;
   }
+
+  // TODO: try combine instructions
 
   Operation move =
       (Operation){.kind = OP_MOV, .as.mov.summand = current_offset};
@@ -457,61 +478,256 @@ void ir_segment(Intermediate *ir, CS_Array *segments) {
   }
 }
 
-void ir_optimize(Intermediate *old_ir, Intermediate *new_ir) {
-  new_ir->count = 0;
-  CS_Array segments = {0};
+enum LoopKind {
+  LK_NONE = 0,
+  LK_INC,
+  LK_DEC,
+};
 
-  ir_segment(old_ir, &segments);
-  for (size_t i = 0; i < segments.count; i++) {
-    Code_Segment segment = segments.items[i];
-    cs_canonicalize(segment, new_ir);
-  }
-
-  CS_Array new_segments = {0};
-  ir_segment(new_ir, &new_segments);
-  if (DEBUG_INFO) {
-    fprintf(stderr, "Canonicalization:\n");
-    for (size_t i = 0; i < new_segments.count; i++) {
-      Code_Segment old_segment = segments.items[i];
-      Code_Segment new_segment = new_segments.items[i];
-      fprintf(stderr,
-              "\n________________________"
-              "Segment_%0*zu"
-              "_________________________\n",
-              6, i);
-      size_t count = old_segment.count > new_segment.count ? old_segment.count
-                                                           : new_segment.count;
-      for (size_t j = 0; j < count; j++) {
-        size_t mark = temp_save();
-        if (j < old_segment.count) {
-          Operation op = old_segment.items[j];
-          fprintf(stderr, "%*zu: %s |   ", 6,
-                  ((Operation *)(&old_segment.items[j]) - old_ir->items),
-                  op_fmt(op));
-        } else {
-          fprintf(stderr, "%*s  %*s |   ", 6, "", OP_FMT_LEN, "");
+bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
+  enum LoopKind loop_kind = LK_NONE;
+  for (size_t i = start + 1; i < end; i++) {
+    Operation *op = &items[i];
+    switch (op->kind) {
+    case OP_NOP:
+      break;
+    case OP_MOV:
+      NOB_ASSERT(op->as.mov.summand == 0);
+      break;
+    case OP_ADD:
+      if (op->as.add.offset == 0) {
+        if (loop_kind != LK_NONE) {
+          return false;
         }
 
-        if (j < new_segment.count) {
-          Operation op = new_segment.items[j];
-          fprintf(stderr, "%*zu: %s\n", 6,
-                  ((Operation *)(&new_segment.items[j]) - new_ir->items),
-                  op_fmt(op));
-        } else {
-          fprintf(stderr, "                             \n");
+        switch (op->as.add.summand) {
+        case -1:
+          loop_kind = LK_DEC;
+          break;
+        case 1:
+          loop_kind = LK_INC;
+          break;
+        case 0:
+          break;
+        default:
+          return false;
         }
-        temp_rewind(mark);
       }
+      break;
+    case OP_NEG:
+      // TODO: think about this case
+      // cannot optimize this any further
+      // maybe loop kind once?
+      return false;
+    case OP_CLR:
+      if (op->as.clr.offset == 0) {
+        // TODO: think about this case
+        // cannot optimize this any further
+        // maybe loop kind once?
+        return false;
+      }
+      break;
+    case OP_MAD:
+      // TODO: think about this case
+      // cannot optimize this any further
+      return false;
+      break;
+    case OP_PCH:
+    case OP_GCH:
+    case OP_LSTART:
+    case OP_LEND:
+      NOB_UNREACHABLE("cannot eliminate loop with this instruction");
     }
   }
+  if (loop_kind == LK_NONE) {
+    return false;
+  }
+  if (loop_kind == LK_INC) {
+    items[start] = (Operation){
+        .kind = OP_NEG,
+        .as.neg = {.offset = 0},
+    };
+  } else {
+    items[start].kind = OP_NOP;
+  }
+  items[end] = (Operation){
+      .kind = OP_CLR,
+      .as.clr = {.offset = 0},
+  };
+
+  for (size_t i = start + 1; i < end; i++) {
+    Operation *op = &items[i];
+    switch (op->kind) {
+    case OP_NOP:
+      break;
+    case OP_MOV:
+      NOB_ASSERT(op->as.mov.summand == 0);
+      break;
+    case OP_ADD:
+      if (op->as.add.offset == 0) {
+        op->kind = OP_NOP;
+      } else {
+        *op = (Operation){
+            .kind = OP_MAD,
+            .as.mad = {.src_offset = 0,
+                       .dst_offset = op->as.add.offset,
+                       .factor = op->as.add.summand},
+        };
+      }
+      break;
+    case OP_NEG:
+      TODO("neg");
+      break;
+    case OP_CLR:
+      break;
+    case OP_MAD:
+      break;
+    case OP_PCH:
+    case OP_GCH:
+    case OP_LSTART:
+    case OP_LEND:
+      NOB_UNREACHABLE("cannot eliminate loop with this instruction");
+    }
+  }
+  return true;
+}
+
+bool eliminate_loops(Intermediate *ir) {
+  // FIXME: when eliminating the loop the zero check is removed
+  // which is fine for instruction which are nop for ^0 == 0
+  // but if this is not true the op is run irregardless of wether ^0 is zero
+  size_t eliminations = 0;
+  size_t l_start = SIZE_MAX;
+  String_Builder debug_output = {0};
+  for (size_t i = 0; i < ir->count; i++) {
+    Operation op = ir->items[i];
+    switch (op.kind) {
+    case OP_LSTART:
+      l_start = i;
+      break;
+    case OP_LEND:
+      if (l_start != SIZE_MAX) {
+        NOB_ASSERT(ir->items[i - 1].kind == OP_MOV);
+
+        if (ir->items[i - 1].as.mov.summand == 0) {
+          if (DEBUG_INFO) {
+            debug_output.count = 0;
+            sb_appendf(&debug_output, "\nElimination %zu\n", eliminations);
+            sb_append_ir(&debug_output, &ir->items[l_start], i - l_start + 1);
+          }
+          if (eliminate_innermost_loop(ir->items, l_start, i)) {
+            eliminations++;
+            if (DEBUG_INFO) {
+              sb_appendf(&debug_output, "transformed to\n");
+              sb_append_ir(&debug_output, &ir->items[l_start], i - l_start + 1);
+              fprintf(stderr, SV_Fmt, SV_Arg(sb_to_sv(debug_output)));
+            }
+          }
+        }
+        l_start = SIZE_MAX;
+      }
+      break;
+
+    case OP_PCH:
+    case OP_GCH:
+      l_start = SIZE_MAX;
+      break;
+    case OP_NOP:
+    case OP_MOV:
+    case OP_ADD:
+    case OP_CLR:
+    case OP_MAD:
+    case OP_NEG:
+      break;
+    }
+  }
+  if (DEBUG_INFO) {
+    fprintf(stderr, "\nhad %zu eliminations\n", eliminations);
+  }
+  sb_free(debug_output);
+  return eliminations != 0;
+}
+
+void debug_cmp_segments(CS_Array *seg1, CS_Array *seg2) {
+  for (size_t i = 0; i < seg2->count; i++) {
+    Code_Segment old_segment = seg1->items[i];
+    Code_Segment new_segment = seg2->items[i];
+    fprintf(stderr,
+            "\n__________________"
+            "Segment_%0*zu"
+            "_____________________\n",
+            6, i);
+    size_t count = old_segment.count > new_segment.count ? old_segment.count
+                                                         : new_segment.count;
+    for (size_t j = 0; j < count; j++) {
+      size_t mark = temp_save();
+      if (j < old_segment.count) {
+        Operation op = old_segment.items[j];
+        fprintf(stderr, "%s |   ", op_fmt(op));
+      } else {
+        fprintf(stderr, "%*s |   ", OP_FMT_LEN, "");
+      }
+
+      if (j < new_segment.count) {
+        Operation op = new_segment.items[j];
+        fprintf(stderr, "%s\n", op_fmt(op));
+      } else {
+        fprintf(stderr, "\n");
+      }
+      temp_rewind(mark);
+    }
+  }
+}
+
+void ir_optimize(Intermediate *ir) {
+  Intermediate ir_buf = {0};
+  Intermediate *new_ir = &ir_buf;
+  CS_Array segments = {0};
+  CS_Array new_segments = {0};
+
+  size_t pass = 0;
+  bool changed;
+  do {
+    if (DEBUG_INFO) {
+      fprintf(stderr, "\n\nOptimization pass %zu\n", pass);
+    }
+    new_ir->count = 0;
+    segments.count = 0;
+
+    ir_segment(ir, &segments);
+    for (size_t i = 0; i < segments.count; i++) {
+      cs_canonicalize(segments.items[i], new_ir);
+    }
+
+    if (DEBUG_INFO) {
+      new_segments.count = 0;
+      ir_segment(new_ir, &new_segments);
+      debug_cmp_segments(&segments, &new_segments);
+    }
+
+    if (pass != 0) {
+      // FIXME: see other fixme
+      break;
+      Intermediate temp = *new_ir;
+      *new_ir = *ir;
+      *ir = temp;
+    }
+    changed = eliminate_loops(new_ir);
+
+    Intermediate temp = *new_ir;
+    *new_ir = *ir;
+    *ir = temp;
+    pass++;
+  } while (changed);
 
   da_free(new_segments);
   da_free(segments);
+  da_free(ir_buf);
 }
 
 void ir_interpret(Intermediate *ir) {
   size_t instruction_ptr = 0;
-  ptrdiff_t tape_ptr = 0;
+  int64_t tape_ptr = 0;
   get_tape_region(TAPE_PAGES);
   Index_Array jump_back = {0};
 
@@ -519,18 +735,26 @@ void ir_interpret(Intermediate *ir) {
     Operation op = ir->items[instruction_ptr];
     switch (op.kind) {
     case OP_NOP:
+      instruction_ptr++;
       break;
     case OP_ADD:
       TAPE_PTR[tape_ptr + op.as.add.offset] += op.as.add.summand;
       instruction_ptr++;
       break;
 
+    case OP_NEG:
+      TAPE_PTR[tape_ptr + op.as.clr.offset] =
+          (uint8_t)(0x100 - (uint16_t)TAPE_PTR[tape_ptr + op.as.clr.offset]);
+      instruction_ptr++;
+      break;
     case OP_CLR:
       TAPE_PTR[tape_ptr + op.as.clr.offset] = 0;
+      instruction_ptr++;
       break;
     case OP_MAD:
-      TAPE_PTR[tape_ptr + op.as.mad.dst_offset] =
+      TAPE_PTR[tape_ptr + op.as.mad.dst_offset] +=
           TAPE_PTR[tape_ptr + op.as.mad.src_offset] * op.as.mad.factor;
+      instruction_ptr++;
       break;
 
     case OP_MOV:
@@ -576,13 +800,6 @@ void ir_interpret(Intermediate *ir) {
   }
 
   free_tape_region();
-}
-
-void sb_append_ir(String_Builder *sb, Intermediate *ir) {
-  for (size_t i = 0; i < ir->count; i++) {
-    Operation op = ir->items[i];
-    sb_appendf(sb, "%*zu: %s\n", 6, i, op_fmt(op));
-  }
 }
 
 void run_on_jit(Code code) {
@@ -770,10 +987,9 @@ int main(int argc, char **argv) {
   }
 
   if (OPTIMIZE) {
-    Intermediate new_ir = {0};
-
+    size_t old_count = ir.count;
     start = clock();
-    ir_optimize(&ir, &new_ir);
+    ir_optimize(&ir);
     end = clock();
     if (STATS) {
       fprintf(stderr, "\n");
@@ -781,24 +997,24 @@ int main(int argc, char **argv) {
       fprintf(stderr, "  ran for ");
       pprint_clock(end - start);
       fprintf(stderr, "\n");
-      fprintf(stderr, "old instruction count: %*zu\n", 6, ir.count);
-      fprintf(stderr, "new instruction count: %*zu\n", 6, new_ir.count);
+      fprintf(stderr, "  old instruction count: %*zu\n", 6, old_count);
+      fprintf(stderr, "  new instruction count: %*zu\n", 6, ir.count);
       fprintf(stderr, "\n");
     }
-
-    swap(Intermediate, ir, new_ir);
-    da_free(new_ir);
   }
 
   if (EMIT_IR) {
     printf("\nIR for `%s`\n", file_name);
     String_Builder ir_str = {0};
-    sb_append_ir(&ir_str, &ir);
+    sb_append_ir(&ir_str, ir.items, ir.count);
     sb_append_null(&ir_str);
     printf("%s", ir_str.items);
   }
 
   if (RUN_JIT) {
+    if (DEBUG_INFO) {
+      fprintf(stderr, "\nstarting JIT interpretation\n");
+    }
     start = clock();
     Code code = translate_to_code(&ir);
     end = clock();
@@ -831,6 +1047,9 @@ int main(int argc, char **argv) {
   }
 
   if (RUN_IR) {
+    if (DEBUG_INFO) {
+      fprintf(stderr, "\nstarting IR interpretation\n");
+    }
     start = clock();
     ir_interpret(&ir);
     end = clock();

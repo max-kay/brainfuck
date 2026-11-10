@@ -91,6 +91,16 @@ static inline instr add_reg_lsl(uint8_t dst, uint8_t a, uint8_t b,
   return out;
 }
 
+static inline instr negate(uint8_t dst, uint8_t src) {
+  //[sf=0]1001011[shift2]0[src][imm6=000000]11111[dst5]
+  NOB_ASSERT(dst < 8);
+  NOB_ASSERT(src < 8);
+  instr out = ENCODE_INSTR("neg w0, w0");
+  out |= (instr)dst;
+  out |= (instr)src << 16;
+  return out;
+}
+
 // static inline instr mask(uint8_t dst, uint8_t src) {
 //   instr out = ENCODE_INSTR("and w0, w0, 0xFF");
 //   NOB_ASSERT(src < 8);
@@ -116,13 +126,13 @@ static inline instr cbnz(uint8_t reg) {
   return out;
 }
 
-static inline void link_cond_branch(instr *op, ptrdiff_t offset) {
+static inline void link_cond_branch(instr *op, int64_t offset) {
   // offset is 4 times bytelen or instruction count
   NOB_ASSERT(offset >= -(1 << 18) && offset < (1 << 18));
   *op |= ((uint32_t)offset & 0x7FFFF) << 5;
 }
 
-static inline instr ld_tape(uint8_t reg, ptrdiff_t offset) {
+static inline instr ld_tape(uint8_t reg, int64_t offset) {
   // 00111000010[imm9]00[xbase5][reg5]
   NOB_ASSERT(reg < 8);
   if (offset > 255 || offset < -256) {
@@ -135,7 +145,7 @@ static inline instr ld_tape(uint8_t reg, ptrdiff_t offset) {
   return out;
 }
 
-static inline instr str_tape(uint8_t reg, ptrdiff_t offset) {
+static inline instr str_tape(uint8_t reg, int64_t offset) {
   // 00111000000[imm9]00[xbase5][reg5]
   NOB_ASSERT(reg < 8);
   if (offset > 255 || offset < -256) {
@@ -148,7 +158,7 @@ static inline instr str_tape(uint8_t reg, ptrdiff_t offset) {
   return out;
 }
 
-static inline instr clear_tape(ptrdiff_t offset) {
+static inline instr clear_tape(int64_t offset) {
   // 00111000000[imm9]00[wzr5=11111][reg5]
   if (offset > 255 || offset < -256) {
     TODO("implement clear tape with larger offsets");
@@ -230,6 +240,11 @@ Code translate_to_code(Intermediate *ir) {
       da_append(&code, str_tape(0, op.as.gch.offset));
       break;
 
+    case OP_NEG:
+      da_append(&code, ld_tape(0, op.as.neg.offset));
+      da_append(&code, negate(0, 0));
+      da_append(&code, str_tape(0, op.as.neg.offset));
+      break;
     case OP_CLR:
       da_append(&code, clear_tape(op.as.clr.offset));
       break;
@@ -263,10 +278,10 @@ Code translate_to_code(Intermediate *ir) {
       break;
     case OP_LEND:
       da_append(&code, ld_tape(0, 0));
-      ptrdiff_t upper_b_idx = (ptrdiff_t)code.count;
+      int64_t upper_b_idx = (int64_t)code.count;
       da_append(&code, cbnz(0));
 
-      ptrdiff_t lower_b_idx = da_pop(&loop_enter_idxs);
+      int64_t lower_b_idx = da_pop(&loop_enter_idxs);
 
       // link the branches
       link_cond_branch(&code.items[lower_b_idx],

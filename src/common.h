@@ -25,6 +25,7 @@ typedef enum {
   OP_NOP = 0,
   OP_MOV,
   OP_ADD,
+  OP_NEG,
   OP_CLR,
   OP_MAD,
   OP_PCH,
@@ -46,6 +47,9 @@ typedef struct {
       int64_t offset;
       int64_t summand;
     } add;
+    struct {
+      int64_t offset;
+    } neg;
     struct {
       int64_t offset;
     } clr;
