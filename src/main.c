@@ -170,6 +170,92 @@ void sb_append_ir(String_Builder *sb, Operation *ops, size_t count) {
   }
 }
 
+bool parse_bf(String_View iter, Intermediate *ir) {
+  size_t open_loops = 0;
+  Token token;
+  Operation operation;
+  while (true) {
+    token = get_next(&iter);
+    operation = (Operation){0};
+    switch (token) {
+    case TOK_JUMP_FORWARD:
+      operation = (Operation){.kind = OP_LSTART};
+      da_append(ir, operation);
+      open_loops++;
+      break;
+
+    case TOK_JUMP_BACKWARD:
+      if (open_loops == 0) {
+        goto error;
+      }
+      open_loops--;
+      operation = (Operation){.kind = OP_LEND};
+      da_append(ir, operation);
+      break;
+
+    case TOK_START:
+      UNREACHABLE("TOK_START is never returned by get_next");
+      break;
+    case TOK_END:
+      goto finish;
+      break;
+
+    case TOK_INC:
+      if (ir->count > 0 && da_last(ir).kind == OP_ADD) {
+        da_last(ir).as.add.summand += 1;
+      } else {
+        operation = (Operation){.kind = OP_ADD, .as.add = {.summand = 1}};
+        da_append(ir, operation);
+      }
+      break;
+    case TOK_DEC:
+      if (ir->count > 0 && da_last(ir).kind == OP_ADD) {
+        da_last(ir).as.add.summand -= 1;
+      } else {
+        operation = (Operation){.kind = OP_ADD, .as.add = {.summand = -1}};
+        da_append(ir, operation);
+      }
+      break;
+
+    case TOK_MOVE_RIGHT:
+      if (ir->count > 0 && da_last(ir).kind == OP_MOV) {
+        da_last(ir).as.mov.summand += 1;
+      } else {
+        operation = (Operation){.kind = OP_MOV, .as.mov = {.summand = 1}};
+        da_append(ir, operation);
+      }
+      break;
+    case TOK_MOVE_LEFT:
+      if (ir->count > 0 && da_last(ir).kind == OP_MOV) {
+        da_last(ir).as.mov.summand += -1;
+      } else {
+        operation = (Operation){.kind = OP_MOV, .as.mov = {.summand = -1}};
+        da_append(ir, operation);
+      }
+      break;
+
+    case TOK_OUTPUT:
+      operation = (Operation){.kind = OP_PCH, .as.pch = {.offset = 0}};
+      da_append(ir, operation);
+      break;
+    case TOK_INPUT:
+      operation = (Operation){.kind = OP_GCH, .as.gch = {.offset = 0}};
+      da_append(ir, operation);
+      break;
+    }
+  }
+
+finish:
+  if (open_loops != 0) {
+    goto error;
+  }
+  return true;
+
+error:
+  ir->count = 0;
+  return false;
+}
+
 typedef struct {
   bool has_read, has_write, has_add, io;
   int64_t read_offset, write_offset, add_offset;
@@ -278,90 +364,24 @@ bool op_greater(Operation a, Operation b) {
   return false;
 }
 
-bool parse_bf(String_View iter, Intermediate *ir) {
-  size_t open_loops = 0;
-  Token token;
-  Operation operation;
-  while (true) {
-    token = get_next(&iter);
-    operation = (Operation){0};
-    switch (token) {
-    case TOK_JUMP_FORWARD:
-      operation = (Operation){.kind = OP_LSTART};
-      da_append(ir, operation);
-      open_loops++;
-      break;
-
-    case TOK_JUMP_BACKWARD:
-      if (open_loops == 0) {
-        goto error;
+void sort_ops(Operation *items, size_t count) {
+  if (count == 0)
+    return;
+  for (size_t i = count - 1; i > 0; i--) {
+    bool swapped = false;
+    for (size_t j = 0; j < i; j++) {
+      Operation *a = &items[j];
+      Operation *b = &items[j + 1];
+      if (op_greater(*a, *b) && op_commute(*a, *b)) {
+        Operation temp = *a;
+        *a = *b;
+        *b = temp;
+        swapped = true;
       }
-      open_loops--;
-      operation = (Operation){.kind = OP_LEND};
-      da_append(ir, operation);
-      break;
-
-    case TOK_START:
-      UNREACHABLE("TOK_START is never returned by get_next");
-      break;
-    case TOK_END:
-      goto finish;
-      break;
-
-    case TOK_INC:
-      if (ir->count > 0 && da_last(ir).kind == OP_ADD) {
-        da_last(ir).as.add.summand += 1;
-      } else {
-        operation = (Operation){.kind = OP_ADD, .as.add = {.summand = 1}};
-        da_append(ir, operation);
-      }
-      break;
-    case TOK_DEC:
-      if (ir->count > 0 && da_last(ir).kind == OP_ADD) {
-        da_last(ir).as.add.summand -= 1;
-      } else {
-        operation = (Operation){.kind = OP_ADD, .as.add = {.summand = -1}};
-        da_append(ir, operation);
-      }
-      break;
-
-    case TOK_MOVE_RIGHT:
-      if (ir->count > 0 && da_last(ir).kind == OP_MOV) {
-        da_last(ir).as.mov.summand += 1;
-      } else {
-        operation = (Operation){.kind = OP_MOV, .as.mov = {.summand = 1}};
-        da_append(ir, operation);
-      }
-      break;
-    case TOK_MOVE_LEFT:
-      if (ir->count > 0 && da_last(ir).kind == OP_MOV) {
-        da_last(ir).as.mov.summand += -1;
-      } else {
-        operation = (Operation){.kind = OP_MOV, .as.mov = {.summand = -1}};
-        da_append(ir, operation);
-      }
-      break;
-
-    case TOK_OUTPUT:
-      operation = (Operation){.kind = OP_PCH, .as.pch = {.offset = 0}};
-      da_append(ir, operation);
-      break;
-    case TOK_INPUT:
-      operation = (Operation){.kind = OP_GCH, .as.gch = {.offset = 0}};
-      da_append(ir, operation);
-      break;
     }
+    if (!swapped)
+      break;
   }
-
-finish:
-  if (open_loops != 0) {
-    goto error;
-  }
-  return true;
-
-error:
-  ir->count = 0;
-  return false;
 }
 
 typedef struct {
@@ -376,16 +396,10 @@ typedef struct {
   size_t capacity;
 } CS_Array;
 
-void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
-  if (!segment.is_basicblock) {
-    da_append_many(new_ir, segment.items, segment.count);
-    return;
-  }
-
-  size_t start = new_ir->count;
+int64_t collect_moves(Operation *items, size_t count, Intermediate *new_ir) {
   int64_t current_offset = 0;
-  for (size_t i = 0; i < segment.count; i++) {
-    Operation op = segment.items[i];
+  for (size_t i = 0; i < count; i++) {
+    Operation op = items[i];
     switch (op.kind) {
     case OP_NOP:
       break;
@@ -427,27 +441,138 @@ void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
       UNREACHABLE("never in basic block");
     }
   }
-  for (size_t i = new_ir->count; start < i; i--) {
-    bool swapped = false;
-    for (size_t j = start; j + 1 < i; j++) {
-      Operation *a = &new_ir->items[j];
-      Operation *b = &new_ir->items[j + 1];
-      if (op_greater(*a, *b) && op_commute(*a, *b)) {
-        Operation temp = *a;
-        *a = *b;
-        *b = temp;
-        swapped = true;
-      }
+  return current_offset;
+}
+
+// Try to merge `b` (executed after `a`, same dst offset) into `a`.
+// Returns true if `a` was overwritten.
+static bool op_combine(Operation *a, Operation *b) {
+  switch (a->kind) {
+  case OP_ADD:
+    switch (b->kind) {
+    case OP_ADD:
+      a->as.add.summand = (uint8_t)(a->as.add.summand + b->as.add.summand);
+      if (a->as.add.summand == 0)
+        a->kind = OP_NOP;
+      return true;
+    case OP_CLR: // add is overwritten
+    case OP_GCH:
+      *a = *b;
+      return true;
+    default:
+      return false;
     }
-    if (!swapped)
-      break;
+  case OP_NEG:
+    switch (b->kind) {
+    case OP_NEG: // -(-x) == x
+      a->kind = OP_NOP;
+      return true;
+    case OP_CLR:
+    case OP_GCH:
+      *a = *b;
+      return true;
+    default:
+      return false;
+    }
+  case OP_CLR:
+    switch (b->kind) {
+    case OP_CLR:
+    case OP_NEG:
+      return true;
+    case OP_GCH:
+      *a = *b;
+      return true;
+    default:
+      return false;
+    }
+  case OP_MAD:
+    if (b->kind == OP_MAD && a->as.mad.dst_offset == b->as.mad.dst_offset &&
+        a->as.mad.src_offset == b->as.mad.src_offset &&
+        a->as.mad.dst_offset !=
+            a->as.mad.src_offset) { // dst += dst * f is not additive in f
+      a->as.mad.factor = (uint8_t)(a->as.mad.factor + b->as.mad.factor);
+      if (a->as.mad.factor == 0)
+        a->kind = OP_NOP;
+      return true;
+    }
+    return false;
+  case OP_MUL:
+    if (b->kind == OP_MUL && a->as.mul.dst_offset == b->as.mul.dst_offset &&
+        a->as.mul.src1_offset == b->as.mul.src1_offset &&
+        a->as.mul.src2_offset == b->as.mul.src2_offset &&
+        a->as.mul.dst_offset !=
+            a->as.mul.src1_offset && // dst must not feed itself
+        a->as.mul.dst_offset != a->as.mul.src2_offset) {
+      a->as.mul.factor = (uint8_t)(a->as.mul.factor + b->as.mul.factor);
+      if (a->as.mul.factor == 0)
+        a->kind = OP_NOP;
+      return true;
+    }
+    return false;
+  case OP_PCH: // never merged: every output is observable
+  case OP_GCH: // never removed: every input byte must be consumed
+    return false;
+  case OP_NOP:
+  case OP_MOV:
+  case OP_LSTART:
+  case OP_LEND:
+    UNREACHABLE("invalid operation while combining operations");
+  }
+  return false;
+}
+
+// combines sorted operations and returns the count of
+// non-nop operations after combining them
+size_t combine_ops(Operation *items, size_t count) {
+  size_t idx_a = 0;
+  size_t idx_b = 1;
+  while (idx_b < count) {
+    Operation *opa = &items[idx_a];
+    Operation *opb = &items[idx_b];
+    if (opb->kind == OP_NOP) {
+      idx_b++;
+      continue;
+    }
+    if (opa->kind == OP_NOP) {
+      *opa = *opb;
+      opb->kind = OP_NOP;
+      idx_b++;
+      continue;
+    }
+    if (opa->as.offset == opb->as.offset && op_combine(opa, opb)) {
+      opb->kind = OP_NOP;
+      idx_b++;
+      continue;
+    }
+    idx_a++;
+    if (idx_a != idx_b) { // keep kept ops contiguous
+      items[idx_a] = *opb;
+      opb->kind = OP_NOP;
+    }
+    idx_b++;
   }
 
-  // TODO: try combine instructions
+  return idx_a + (items[idx_a].kind == OP_NOP ? 0 : 1);
+}
 
-  Operation move =
-      (Operation){.kind = OP_MOV, .as.mov.summand = current_offset};
-  da_append(new_ir, move);
+void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
+  if (!segment.is_basicblock) {
+    da_append_many(new_ir, segment.items, segment.count);
+    return;
+  }
+
+  size_t start = new_ir->count;
+
+  size_t offset = collect_moves(segment.items, segment.count, new_ir);
+
+  sort_ops(&new_ir->items[start], new_ir->count - start);
+  size_t new_count = combine_ops(&new_ir->items[start], new_ir->count - start);
+  new_ir->count = start + new_count;
+
+  if (offset != 0) {
+    Operation move = (Operation){.kind = OP_MOV, .as.mov.summand = offset};
+    da_append(new_ir, move);
+  }
 }
 
 void ir_segment(Intermediate *ir, CS_Array *segments) {
@@ -497,16 +622,22 @@ enum LoopKind {
   LK_DEC,
 };
 
+// This function assumes the code segment
+//   - start is LSTART
+//   - end is LEND
+//   - does not contain PCH or GCH or MOV
+//   - the op at start+1 < i < end is not LSTART nor LEND
+//   - the segment is canonicalized
+//
 bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
   enum LoopKind loop_kind = LK_NONE;
   for (size_t i = start + 1; i < end; i++) {
     Operation *op = &items[i];
     switch (op->kind) {
-    case OP_NOP:
+    default:
       break;
-    case OP_MOV:
-      NOB_ASSERT(op->as.mov.summand == 0);
-      break;
+    }
+    switch (op->kind) {
     case OP_ADD:
       if (op->as.add.offset == 0) {
         if (loop_kind != LK_NONE) {
@@ -552,9 +683,12 @@ bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
       break;
     case OP_PCH:
     case OP_GCH:
+    case OP_MOV:
     case OP_LSTART:
     case OP_LEND:
-      NOB_UNREACHABLE("cannot eliminate loop with this instruction");
+      UNREACHABLE("sanity check!");
+    case OP_NOP:
+      UNREACHABLE("unreachable because canonicalized!");
     }
   }
   if (loop_kind == LK_NONE) {
@@ -578,18 +712,18 @@ bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
     switch (op->kind) {
     case OP_NOP:
       break;
-    case OP_MOV:
-      NOB_ASSERT(op->as.mov.summand == 0);
-      break;
     case OP_ADD:
       if (op->as.add.offset == 0) {
         op->kind = OP_NOP;
       } else {
         *op = (Operation){
             .kind = OP_MAD,
-            .as.mad = {.src_offset = 0,
-                       .dst_offset = op->as.add.offset,
-                       .factor = op->as.add.summand},
+            .as.mad =
+                {
+                    .src_offset = 0,
+                    .dst_offset = op->as.add.offset,
+                    .factor = op->as.add.summand,
+                },
         };
       }
       break;
@@ -605,17 +739,19 @@ bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
     case OP_MUL:
       TODO("mul");
       break;
+    case OP_MOV:
     case OP_PCH:
     case OP_GCH:
     case OP_LSTART:
     case OP_LEND:
-      NOB_UNREACHABLE("cannot eliminate loop with this instruction");
+      NOB_UNREACHABLE("sanity check 2!");
     }
   }
   return true;
 }
 
 bool eliminate_loops(Intermediate *ir) {
+  return false;
   // FIXME: when eliminating the loop the zero check is removed
   // which is fine for instruction which are nop for ^0 == 0
   // but if this is not true the op is run irregardless of wether ^0 is zero
@@ -630,38 +766,31 @@ bool eliminate_loops(Intermediate *ir) {
       break;
     case OP_LEND:
       if (l_start != SIZE_MAX) {
-        NOB_ASSERT(ir->items[i - 1].kind == OP_MOV);
+        if (DEBUG_INFO) {
+          debug_output.count = 0;
+          sb_appendf(&debug_output, "\nElimination %zu\n", eliminations);
+          sb_append_ir(&debug_output, &ir->items[l_start], i - l_start + 1);
+        }
 
-        if (ir->items[i - 1].as.mov.summand == 0) {
+        if (eliminate_innermost_loop(ir->items, l_start, i)) {
+          eliminations++;
           if (DEBUG_INFO) {
-            debug_output.count = 0;
-            sb_appendf(&debug_output, "\nElimination %zu\n", eliminations);
+            sb_appendf(&debug_output, "transformed to\n");
             sb_append_ir(&debug_output, &ir->items[l_start], i - l_start + 1);
-          }
-          if (eliminate_innermost_loop(ir->items, l_start, i)) {
-            eliminations++;
-            if (DEBUG_INFO) {
-              sb_appendf(&debug_output, "transformed to\n");
-              sb_append_ir(&debug_output, &ir->items[l_start], i - l_start + 1);
-              fprintf(stderr, SV_Fmt, SV_Arg(sb_to_sv(debug_output)));
-            }
+            fprintf(stderr, SV_Fmt, SV_Arg(sb_to_sv(debug_output)));
           }
         }
-        l_start = SIZE_MAX;
       }
+      l_start = SIZE_MAX;
       break;
 
     case OP_PCH:
     case OP_GCH:
+    case OP_MOV:
+      // Do not optimize a loop containing PCH, GCH or MOV
       l_start = SIZE_MAX;
       break;
-    case OP_NOP:
-    case OP_MOV:
-    case OP_ADD:
-    case OP_CLR:
-    case OP_MUL:
-    case OP_MAD:
-    case OP_NEG:
+    default:
       break;
     }
   }
@@ -677,9 +806,9 @@ void debug_cmp_segments(CS_Array *seg1, CS_Array *seg2) {
     Code_Segment old_segment = seg1->items[i];
     Code_Segment new_segment = seg2->items[i];
     fprintf(stderr,
-            "\n__________________"
+            "\n________________________"
             "Segment_%0*zu"
-            "_____________________\n",
+            "___________________________\n",
             6, i);
     size_t count = old_segment.count > new_segment.count ? old_segment.count
                                                          : new_segment.count;
@@ -710,7 +839,7 @@ void ir_optimize(Intermediate *ir) {
   CS_Array new_segments = {0};
 
   size_t pass = 0;
-  bool changed;
+  bool changed = false;
   do {
     if (DEBUG_INFO) {
       fprintf(stderr, "\n\nOptimization pass %zu\n", pass);
@@ -729,13 +858,6 @@ void ir_optimize(Intermediate *ir) {
       debug_cmp_segments(&segments, &new_segments);
     }
 
-    if (pass != 0) {
-      // FIXME: see other fixme
-      break;
-      Intermediate temp = *new_ir;
-      *new_ir = *ir;
-      *ir = temp;
-    }
     changed = eliminate_loops(new_ir);
 
     Intermediate temp = *new_ir;
@@ -1024,11 +1146,12 @@ int main(int argc, char **argv) {
     if (STATS) {
       fprintf(stderr, "\n");
       fprintf(stderr, "Optimized IR\n");
+      fprintf(stderr, "  old instruction count: %*zu\n", 6, old_count);
+      fprintf(stderr, "  new instruction count: %*zu\n", 6, ir.count);
       fprintf(stderr, "  ran for ");
       pprint_clock(end - start);
       fprintf(stderr, "\n");
-      fprintf(stderr, "  old instruction count: %*zu\n", 6, old_count);
-      fprintf(stderr, "  new instruction count: %*zu\n", 6, ir.count);
+
       fprintf(stderr, "\n");
     }
   }
