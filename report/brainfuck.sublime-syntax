@@ -1,0 +1,25 @@
+%YAML 1.2
+---
+name: Brainfuck
+file_extensions:
+  - bf
+  - b
+scope: source.brainfuck
+
+contexts:
+  main:
+    # Tape and cell modification: + - < >
+    - match: '[+\-<>]'
+      scope: keyword.operator.brainfuck
+
+    # Loops: [ ]
+    - match: '[\[\]]'
+      scope: keyword.control.loop.brainfuck
+
+    # I/O: , .
+    - match: '[,.]'
+      scope: support.function.io.brainfuck
+
+    # Everything else is a comment
+    - match: '[^+\-<>\[\],.]+'
+      scope: comment.line.brainfuck

@@ -1,67 +1,14 @@
+#import "bf-lib.typ": tape, transform, transform_vertical
 #set heading(numbering: "1.")
+#set page(numbering: "1");
 
-#set raw(syntaxes: ("tape-ir.sublime-syntax", "aarch64.sublime-syntax"))
-
-#let tape(
-  cells,
-  ptr: 0,
-  size: 4em,
-  edge: 3.4em,
-  accent: rgb("#e8590c"),
-  caret: true,
-) = {
-  let n = cells.len()
-  let gray = luma(210)
-
-  // FIXME: corner radius changes with edge
-  let left-edge = rect(
-    width: 90%,
-    height: 90%,
-    radius: (top-right: 10%, bottom-right: 10%, rest: 0pt),
-    fill: gradient.linear(white, gray, angle: 0deg),
-  )
-  let right-edge = rect(
-    width: 90%,
-    height: 90%,
-    radius: (top-left: 10%, bottom-left: 10%, rest: 0pt),
-    fill: gradient.linear(gray, white, angle: 0deg),
-  )
-
-  let cell(c, i) = {
-    let active = i == ptr
-    rect(
-      width: 90%,
-      height: 90%,
-      fill: gray,
-      radius: 10%,
-      stroke: if active { accent + 1.4pt } else { none },
-      align(center + horizon, c),
-    )
-  }
-
-  // pointer row: a caret under the active cell
-  let carets = range(n + 2).map(j => {
-    if caret and j == ptr + 1 {
-      align(center + top, text(fill: accent, size: 0.9em)[▲])
-    } else { [] }
-  })
-
-  align(center, grid(
-    columns: (edge, ..((size,) * n), edge),
-    rows: (size, auto),
-    row-gutter: 0.15em,
-    left-edge,
-    ..cells.enumerate().map(((i, c)) => cell(c, i)),
-    right-edge,
-    ..carets,
-  ))
-}
+#set raw(syntaxes: ("tape-ir.sublime-syntax", "aarch64.sublime-syntax", "brainfuck.sublime-syntax"))
 
 // Display block code in a larger block
 // with more padding.
 #show raw.where(block: true): block.with(
   fill: luma(240),
-  width: 100%,
+  // width: 100%,
   inset: 10pt,
   radius: 4pt,
 )
@@ -74,6 +21,10 @@
     Max Krummenacher
   ]
 }
+#pagebreak()
+
+#outline()
+
 #pagebreak()
 
 = Brainfuck
@@ -116,42 +67,84 @@ Since the tape is zero initialized any code written here is skipped.
 
 == Examples
 
-=== Setting a value equal to zero
-#tape(($x$,), ptr: 0)
-```
-[-]
-```
-#tape(($0$,), ptr: 0)
+#figure(
+  transform(
+    tape(ptr: 0, $x$),
+    ```bf
+    [-]
+    ```,
+    tape(ptr: 0, $0$),
+  ),
+  caption: [Clear loop],
+)<ex_clr_loop>
 
-=== Addition
-#tape(($x$, $y$), ptr: 0)
-```
-[>+<-]
-```
-#tape(($0$, $y+x$), ptr: 0)
+@ex_clr_loop shows the transformation to clear the value at the current tape pointer.
+This loop decrements the value at the tape pointer by one until zero is reached. Note that this loop runs exactly $x$ times.
 
-=== Addition Preserving original value
-#tape(($x$, $y$, $0$), ptr: 0)
+#figure(
+  transform(
+    tape(ptr: 0, $x$, $y$),
+    ```bf
+    [>+<-]
+    ```,
+    tape(ptr: 0, $0$, $y+x$),
+  ),
+  caption: [Addition],
+)<ex_add>
 
-```bf
-[>+>+<<-]
->>
-```
+The loop shown in @ex_add adds the value at the tape pointer to the next value on the tape pointer.
+This works because the loop above runs exactly $x$ times and increases the value by one each time.
 
-#tape(($0$, $y+x$, $x$), ptr: 2)
+#figure(
+  transform(
+    tape(ptr: 0, $x$, $y$),
+    ```bf
+    [>+++<-]
+    ```,
+    tape(ptr: 0, $0$, $y + 3x$),
+  ),
+  caption: [Multiplication by Constant],
+)<ex_mul_const>
 
-```bf
-[<<+>>-]
-<<
-```
+The loop shown in @ex_mul_const works in a simmilar fashion to the example in @ex_add,
+with the difference that the increment operation is run three times which multiplies the value at offset 0
+by three.
+This can be generalized to a multiplication by an arbitrary constant.
 
-#tape(($x$, $y+x$, $0$), ptr: 0)
-=== Multiplication by Constant
-#tape(($x$, $y$), ptr: 0)
-```
-[>+++<-]
-```
-#tape(($0$, $y + 3x$), ptr: 0)
+#figure(
+  transform_vertical(
+    tape(ptr: 0, $x$, $y$, $0$),
+    ```bf
+    [>+>+<<-]
+    >>
+    ```,
+    tape(ptr: 2, $0$, $y+x$, $x$),
+    ```
+    [<<+>>-]
+    <<
+    ```,
+    tape(ptr: 0, $x$, $y+x$, $0$),
+  ),
+  caption: [Addition Preserving Original value],
+)<ex_add_preserve>
+The loop shown in @ex_add adds the value at the tape pointer to the next value on the tape pointer.
+
+#figure(
+  transform_vertical(
+    tape(ptr: 0, $x$, $y$, $0$, $0$),
+    ```bf
+    [
+      >
+      [>+>+<<-]
+      >
+      [<+>-]
+      <<-
+    ]
+    ```,
+    tape(ptr: 0, $0$, $y$, $0$, $x y$),
+  ),
+  caption: [Dynamic Multiplication],
+)
 
 
 = Intermediate representation
@@ -184,19 +177,41 @@ The operations of the IR are shown in @ir-instructions.
     [```c *(t_ptr + off) = getchar();```],
 
     [```tir MAD ^dst ^src imm```],
-    [multiply the value at tape pointer + `src` by `imm` and add the result to the value at tape pointer + `dst`
-      `dst` is not allowed to eqaul `src`.
+    [multiply the value at tape pointer + `src` by `imm` and add the result to the value at tape pointer + `dst`,
+      `dst` is not allowed to equal `src`
     ],
-    [```c
-    *(t_ptr + dst) =
-        *(t_ptr + src) * imm;
-    ```],
+    [```c *(t_ptr + dst) +=```\ #h(3em) ```c *(t_ptr + src) * imm;```],
+
+    [```tir NEG ^off```],
+    [negate the value at tape pointer + `off`],
+    [```c *(t_ptr + off) = ```\ #h(3em) ```c -*(t_ptr + off);```],
 
     [```tir CLR ^off```], [set the value at tape pointer + `off` to zero], [```c *(t_ptr + off) = 0;```],
     [```tir NOP ```], [do nothing], align(center)[-],
   ),
   caption: [IR-Instructions],
 )<ir-instructions>
+
+#figure(
+  table(
+    columns: 2,
+    align: (center, left),
+    [*BF-Instruction*], [*IR-Instruction*],
+    [`+`], [```tir ADD     ^0   1```],
+    [`-`], [```tir ADD     ^0 255```],
+    [`>`], [```tir MOV      1```],
+    [`<`], [```tir MOV     -1```],
+
+    [`[`], [```tir LSTART ```],
+
+    [`]`], [```tir LEND``` ],
+
+    [`.`], [```tir PCH     ^0```],
+    [`,`], [```tir GCH     ^0```],
+  ),
+  caption: [Translation to IR],
+)
+
 
 
 = Canonicalization of Basic Blocks
@@ -205,42 +220,97 @@ A basic block is a segment of IR which does not contain any of `LSTART`, `LEND`.
 Canonicalization of such blocks happends in three stages.
 - collecting the `MOV`-operations into one.
 - sorting the operations
-- eliminating and combining instructions on the same offset.
+- eliminating and combining operations.
+
 == Collecting `MOV`
 The `MOV` operations are collected and put at the end of a basic block
 and the offsets to the arithmetic and io operations are updated accordingly.
 
+#figure(
+  grid(
+    gutter: 1em,
+    columns: 2,
+    ```tir
+    ADD ^0 1
+    MOV  1
+    ADD ^0 1
+    CLR ^1
+    ```,
+    ```tir
+    ADD ^0 1
+    ADD ^1 1
+    CLR ^2
+    MOV  1
+    ```,
+  ),
+  caption: [],
+)<canon_mov_collect>
+
+
 == Sorting Operations
-Since the order of some instructions does not matter we can sort them.
+To ensure correct sorting of the instructions bubble sort with an additional commutativity test is used.
 
-```tir
-ADD ^0  1
-MAD ^0 ^1  4
-```
-is the same as
+The special case of the commutativity of `MOV` can be ignored,
+since the `MOV` instructions were already moved to the end of the basic block in the last step of the canonicalization.
+The IO-operations `PCH` and `GCH` never commute.
 
-```tir
-MAD ^0 ^1  4
-ADD ^0  1
-```
-
-since it is just the transformation from `[x, y]` to `[x + 1 + 4*y, y] = [x + 4*y + 1, y]`
-
-But
-```tir
-ADD ^0  1
-MAD ^1 ^0  4
-```
-`{..., x, y] -> [x+1, y + 4 * (x+1)]`
-and
-```tir
-MAD ^1 ^0  4
-ADD ^0  1
-```
-`[x, y] -> [x+1, y + 4*x]`
-lead to different outcomes
+The commutativity of the other instructions can be determined from their foot print.
 
 == Combining Operations
+
+
+
+= Loop elimination
+
+
+```tir
+LSTART
+ADD ^0 -1
+ADD ^o  n
+LEND
+```
+
+```tir
+MAD ^o ^0 n
+CLR ^0
+```
+for `o`$!=0$
+
+```tir
+LSTART
+ADD ^0  1
+ADD ^o  n
+LEND
+```
+```tir
+NEG ^o
+MAD ^o ^0 n
+CLR ^0
+```
+
+```tir
+LSTART
+ADD ^0 -1
+MAD ^d ^s n
+LEND
+```
+if $0!= d != s != 0$
+$ x'_d = x_d + n x_s + ... + n x_s = x_d + x_0 + x_0 n x_s $
+
+
+
+```tir
+MUL ^d ^s ^0 n
+CLR ^0
+```
+
+```tir
+LSTART
+ADD ^0 -1
+CLR ^o
+LEND
+```
+
 
 = Underflow and Overflow Handling
 Underflows and overflows are handled by the operating system.
@@ -266,13 +336,16 @@ The assembly for the one brainfuck file is translated to a single function:
 
 One register holds the tape pointer (`xtape`) throughout the whole program.
 
-`xtape` is chosen to be x19, since it is a callee preserved register.
+`xtape` is chosen to be x19, since it is a callee saved register.
 
 To call `getchar` and `putchar` the function pointers are passed to the function.
-Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used for them.
+Simmilar to `xtape` callee saved registers (`xgetc` and `xputc`) are used for them.
 
 
-== Prelude
+== Prologue
+The following prologue is the header to the function body.
+It sets up the registers and the stack for the execution of the program.
+
 ```aarch64
   ; allocate frame, save {fp, lr} at [sp, 0]
   stp fp, lr, [sp, -48]!
@@ -290,9 +363,11 @@ Simmilar to `xtape` callee preserved registers (`xgetc` and `xputc`) are used fo
   mov xgetc, x2
 ```
 
-== Postlude
+== Epilogue
+The following epilogue is the footer to the function body.
+It restores the registers and deallocates the stack.
 ```aarch64
-  ; restore callee preserved registers
+  ; restore callee saved registers
   ldp xtape, xunused, [sp, 16]
   ldp xputc, xgetc, [sp, 32]
 

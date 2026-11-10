@@ -16,7 +16,7 @@ contexts:
     - match: '(?<=\^)(?:-?\d+|[A-Za-z_]\w*)'
       scope: variable.parameter.offset.tapeir
 
-    - match: '\b(?:ADD|MOV|LSTART|LEND|PCH|GCH|MAD|CLR|NOP)\b'
+    - match: '\b(?:ADD|MOV|LSTART|LEND|PCH|GCH|MAD|CLR|NEG|NOP)\b'
       scope: keyword.control.tapeir
 
     # any other number is an immediate
