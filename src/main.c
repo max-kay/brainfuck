@@ -524,6 +524,11 @@ static bool op_combine(Operation *a, Operation *b) {
 // combines sorted operations and returns the count of
 // non-nop operations after combining them
 size_t combine_ops(Operation *items, size_t count) {
+  if (count == 0)
+    return 0;
+  if (count == 1)
+    return items[0].kind == OP_NOP ? 0 : 1;
+
   size_t idx_a = 0;
   size_t idx_b = 1;
   while (idx_b < count) {
@@ -630,6 +635,8 @@ enum LoopKind {
 //   - the segment is canonicalized
 //
 bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
+  NOB_ASSERT(items[start].kind = OP_LSTART);
+  NOB_ASSERT(items[end].kind = OP_LEND);
   enum LoopKind loop_kind = LK_NONE;
   for (size_t i = start + 1; i < end; i++) {
     Operation *op = &items[i];
@@ -659,26 +666,15 @@ bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
       }
       break;
     case OP_NEG:
-      // TODO: think about this case
-      // cannot optimize this any further
-      // maybe loop kind once?
       return false;
+      break;
     case OP_CLR:
-      if (op->as.clr.offset == 0) {
-        // TODO: think about this case
-        // cannot optimize this any further
-        // maybe loop kind once?
-        return false;
-      }
+      return false;
       break;
     case OP_MUL:
-      // TODO: think about this case
-      // cannot optimize this any further
       return false;
       break;
     case OP_MAD:
-      // TODO: think about this case
-      // cannot optimize this any further
       return false;
       break;
     case OP_PCH:
@@ -868,7 +864,7 @@ void ir_optimize(Intermediate *ir) {
 
   da_free(new_segments);
   da_free(segments);
-  da_free(ir_buf);
+  da_free(*new_ir);
 }
 
 void ir_interpret(Intermediate *ir) {
@@ -1165,9 +1161,6 @@ int main(int argc, char **argv) {
   }
 
   if (RUN_JIT) {
-    if (DEBUG_INFO) {
-      fprintf(stderr, "\nstarting JIT interpretation\n");
-    }
     start = clock();
     Code code = translate_to_code(&ir);
     end = clock();
@@ -1181,6 +1174,9 @@ int main(int argc, char **argv) {
       fprintf(stderr, "\n");
     }
 
+    if (DEBUG_INFO) {
+      fprintf(stderr, "\nstarting JIT interpretation\n");
+    }
     start = clock();
     run_on_jit(code);
     end = clock();
