@@ -177,10 +177,16 @@ The operations of the IR are shown in @ir-instructions.
     [```c *(t_ptr + off) = getchar();```],
 
     [```tir MAD ^dst ^src imm```],
-    [multiply the value at tape pointer + `src` by `imm` and add the result to the value at tape pointer + `dst`,
-      `dst` is not allowed to equal `src`
+    [multiply the value at tape pointer + `src` by `imm` and add the result to the value at tape pointer + `dst`
+      // TODO: case dst == src
     ],
     [```c *(t_ptr + dst) +=```\ #h(3em) ```c *(t_ptr + src) * imm;```],
+
+    [```tir MUL ^dst ^src1 ^src2 imm```],
+    [multiply the value at tape pointer + `src1` by the value at tape pointer +`src2` and by `imm`
+      and add the result to the value at tape pointer + `dst`
+    ],
+    [```c *(t_ptr + dst) +=```\ #h(3em) ```c *(t_ptr + src1)```\ #h(3em) ```c * *(t_ptr + src2)```\ #h(3em) ```c * imm;```],
 
     [```tir NEG ^off```],
     [negate the value at tape pointer + `off`],

@@ -28,6 +28,7 @@ typedef enum {
   OP_NEG,
   OP_CLR,
   OP_MAD,
+  OP_MUL,
   OP_PCH,
   OP_GCH,
   OP_LSTART,
@@ -54,12 +55,16 @@ typedef struct {
       int64_t offset;
     } clr;
     struct {
-      // the placement of src_offset is important
-      // for variant get_offset
-      int64_t src_offset;
       int64_t dst_offset;
+      int64_t src_offset;
       int64_t factor;
     } mad;
+    struct {
+      int64_t dst_offset;
+      int64_t src1_offset;
+      int64_t src2_offset;
+      int64_t factor;
+    } mul;
     struct {
       int64_t offset;
     } gch;

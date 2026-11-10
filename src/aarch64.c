@@ -271,6 +271,10 @@ Code translate_to_code(Intermediate *ir) {
       break;
     }
 
+    case OP_MUL:
+      TODO("mul");
+      break;
+
     case OP_LSTART:
       da_append(&code, ld_tape(0, 0));
       da_append(&code, cbz(0));

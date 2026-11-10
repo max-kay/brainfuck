@@ -122,37 +122,42 @@ static const char *fmt_off(int64_t off) {
   return temp_sprintf("^%" PRId64, off);
 }
 
-#define OP_FMT_LEN 24
+#define OP_FMT_LEN 30
 char *op_fmt(Operation op) {
   switch (op.kind) {
   case OP_MOV:
-    return temp_sprintf("MOV    %5" PRId64 " %5s %5s", op.as.mov.summand, "",
-                        "");
+    return temp_sprintf("MOV    %5" PRId64 " %5s %5s %5s", op.as.mov.summand,
+                        "", "", "");
   case OP_ADD:
-    return temp_sprintf("ADD    %5s %5" PRId64 " %5s",
-                        fmt_off(op.as.add.offset), op.as.add.summand, "");
+    return temp_sprintf("ADD    %5s %5" PRId64 " %5s %5s",
+                        fmt_off(op.as.add.offset), op.as.add.summand, "", "");
   case OP_NEG:
-    return temp_sprintf("NEG    %5s %5s %5s", fmt_off(op.as.neg.offset), "",
-                        "");
+    return temp_sprintf("NEG    %5s %5s %5s %5s", fmt_off(op.as.neg.offset), "",
+                        "", "");
   case OP_CLR:
-    return temp_sprintf("CLR    %5s %5s %5s", fmt_off(op.as.clr.offset), "",
-                        "");
+    return temp_sprintf("CLR    %5s %5s %5s %5s", fmt_off(op.as.clr.offset), "",
+                        "", "");
   case OP_MAD:
-    return temp_sprintf("MAD    %5s %5s %5" PRId64,
+    return temp_sprintf("MAD    %5s %5s %5" PRId64 " %5s",
                         fmt_off(op.as.mad.dst_offset),
-                        fmt_off(op.as.mad.src_offset), op.as.mad.factor);
+                        fmt_off(op.as.mad.src_offset), op.as.mad.factor, "");
+  case OP_MUL:
+    return temp_sprintf("MUL    %5s %5s %5s %5" PRId64,
+                        fmt_off(op.as.mul.dst_offset),
+                        fmt_off(op.as.mul.src1_offset),
+                        fmt_off(op.as.mul.src2_offset), op.as.mul.factor);
   case OP_PCH:
-    return temp_sprintf("PCH    %5s %5s %5s", fmt_off(op.as.pch.offset), "",
-                        "");
+    return temp_sprintf("PCH    %5s %5s %5s %5s", fmt_off(op.as.pch.offset), "",
+                        "", "");
   case OP_GCH:
-    return temp_sprintf("GCH    %5s %5s %5s", fmt_off(op.as.gch.offset), "",
-                        "");
+    return temp_sprintf("GCH    %5s %5s %5s %5s", fmt_off(op.as.gch.offset), "",
+                        "", "");
   case OP_LSTART:
-    return temp_sprintf("LSTART %5s %5s %5s", "", "", "");
+    return temp_sprintf("LSTART %5s %5s %5s %5s", "", "", "", "");
   case OP_LEND:
-    return temp_sprintf("LEND   %5s %5s %5s", "", "", "");
+    return temp_sprintf("LEND   %5s %5s %5s %5s", "", "", "", "");
   case OP_NOP:
-    return temp_sprintf("NOP    %5s %5s %5s", "", "", "");
+    return temp_sprintf("NOP    %5s %5s %5s %5s", "", "", "", "");
   }
   return NULL;
 }
@@ -188,6 +193,9 @@ static inline Footprint op_footprint(Operation op) {
   case OP_CLR:
     f.has_write = true;
     f.write_offset = op.as.clr.offset;
+    break;
+  case OP_MUL:
+    TODO("mul");
     break;
   case OP_MAD:
     f.has_read = true;
@@ -396,6 +404,11 @@ void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
       op.as.clr.offset += current_offset;
       da_append(new_ir, op);
       break;
+    case OP_MUL:
+      op.as.mul.dst_offset += current_offset;
+      op.as.mul.src1_offset += current_offset;
+      op.as.mul.src2_offset += current_offset;
+      break;
     case OP_MAD:
       op.as.mad.dst_offset += current_offset;
       op.as.mad.src_offset += current_offset;
@@ -527,6 +540,11 @@ bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
         return false;
       }
       break;
+    case OP_MUL:
+      // TODO: think about this case
+      // cannot optimize this any further
+      return false;
+      break;
     case OP_MAD:
       // TODO: think about this case
       // cannot optimize this any further
@@ -579,8 +597,13 @@ bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
       TODO("neg");
       break;
     case OP_CLR:
+      TODO("clr");
       break;
     case OP_MAD:
+      TODO("mad");
+      break;
+    case OP_MUL:
+      TODO("mul");
       break;
     case OP_PCH:
     case OP_GCH:
@@ -636,6 +659,7 @@ bool eliminate_loops(Intermediate *ir) {
     case OP_MOV:
     case OP_ADD:
     case OP_CLR:
+    case OP_MUL:
     case OP_MAD:
     case OP_NEG:
       break;
@@ -754,6 +778,12 @@ void ir_interpret(Intermediate *ir) {
     case OP_MAD:
       TAPE_PTR[tape_ptr + op.as.mad.dst_offset] +=
           TAPE_PTR[tape_ptr + op.as.mad.src_offset] * op.as.mad.factor;
+      instruction_ptr++;
+      break;
+    case OP_MUL:
+      TAPE_PTR[tape_ptr + op.as.mul.dst_offset] +=
+          TAPE_PTR[tape_ptr + op.as.mul.src1_offset] *
+          TAPE_PTR[tape_ptr + op.as.mul.src2_offset] * op.as.mul.factor;
       instruction_ptr++;
       break;
 
