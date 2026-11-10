@@ -751,9 +751,10 @@ void ir_optimize(Intermediate *ir) {
 
 void ir_interpret(Intermediate *ir) {
   size_t instruction_ptr = 0;
-  int64_t tape_ptr = 0;
-  get_tape_region(TAPE_PAGES);
   Index_Array jump_back = {0};
+
+  get_tape_region(TAPE_PAGES);
+  uint8_t *tape_ptr = TAPE_PTR;
 
   while (instruction_ptr < ir->count) {
     Operation op = ir->items[instruction_ptr];
@@ -762,28 +763,27 @@ void ir_interpret(Intermediate *ir) {
       instruction_ptr++;
       break;
     case OP_ADD:
-      TAPE_PTR[tape_ptr + op.as.add.offset] += op.as.add.summand;
+      *(tape_ptr + op.as.add.offset) += op.as.add.summand;
       instruction_ptr++;
       break;
 
     case OP_NEG:
-      TAPE_PTR[tape_ptr + op.as.clr.offset] =
-          (uint8_t)(0x100 - (uint16_t)TAPE_PTR[tape_ptr + op.as.clr.offset]);
+      *(tape_ptr + op.as.neg.offset) = -*(tape_ptr + op.as.neg.offset);
       instruction_ptr++;
       break;
     case OP_CLR:
-      TAPE_PTR[tape_ptr + op.as.clr.offset] = 0;
+      *(tape_ptr + op.as.clr.offset) = 0;
       instruction_ptr++;
       break;
     case OP_MAD:
-      TAPE_PTR[tape_ptr + op.as.mad.dst_offset] +=
-          TAPE_PTR[tape_ptr + op.as.mad.src_offset] * op.as.mad.factor;
+      *(tape_ptr + op.as.mad.dst_offset) +=
+          *(tape_ptr + op.as.mad.src_offset) * op.as.mad.factor;
       instruction_ptr++;
       break;
     case OP_MUL:
-      TAPE_PTR[tape_ptr + op.as.mul.dst_offset] +=
-          TAPE_PTR[tape_ptr + op.as.mul.src1_offset] *
-          TAPE_PTR[tape_ptr + op.as.mul.src2_offset] * op.as.mul.factor;
+      *(tape_ptr + op.as.mul.dst_offset) +=
+          *(tape_ptr + op.as.mul.src1_offset) *
+          *(tape_ptr + op.as.mul.src2_offset) * op.as.mul.factor;
       instruction_ptr++;
       break;
 
@@ -793,16 +793,16 @@ void ir_interpret(Intermediate *ir) {
       break;
 
     case OP_GCH:
-      TAPE_PTR[tape_ptr + op.as.gch.offset] = getchar();
+      *(tape_ptr + op.as.gch.offset) = getchar();
       instruction_ptr++;
       break;
     case OP_PCH:
-      putchar(TAPE_PTR[tape_ptr + op.as.pch.offset]);
+      putchar(*(tape_ptr + op.as.pch.offset));
       instruction_ptr++;
       break;
 
     case OP_LSTART:
-      if (TAPE_PTR[tape_ptr] == 0) {
+      if (*tape_ptr == 0) {
         size_t lstarts = 1;
         while (lstarts != 0) {
           instruction_ptr++;
@@ -819,7 +819,7 @@ void ir_interpret(Intermediate *ir) {
       }
       break;
     case OP_LEND:
-      if (TAPE_PTR[tape_ptr] != 0) {
+      if (*tape_ptr != 0) {
         instruction_ptr = da_last(&jump_back);
       } else {
         UNUSED(da_pop(&jump_back));
