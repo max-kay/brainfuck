@@ -27,6 +27,8 @@ bool run_test(String_View test_name, String_Builder *test_log) {
   String_Builder output = {0};
   bool test_passed = true;
 
+  printf("running tests for `" SV_Fmt "`\n", SV_Arg(test_name));
+
   char *path_expected =
       temp_sprintf("%s/" SV_Fmt ".expected", TEST_PATH, SV_Arg(test_name));
   if (!file_exists(path_expected)) {
