@@ -1,3 +1,4 @@
+#include <math.h>
 #define NOB_STRIP_PREFIX
 #define NOB_NO_ECHO
 #define NOB_IMPLEMENTATION
@@ -6,6 +7,8 @@
 #define BIN_PATH "./bf-jit"
 
 #define TEST_PATH "tests"
+
+#define EOL_MARK "\033[7m%\033[27m\n"
 
 static Cmd CMD = {0};
 
@@ -61,8 +64,11 @@ bool run_test(String_View test_name, String_Builder *test_log) {
   test_log->count = 0;
   sb_appendf(test_log, "\033[1;31mTest `" SV_Fmt "` failed!\033[0m\n",
              SV_Arg(test_name));
+
   for (int flag_idx = 0; flag_idx < T_FLAG_COUNT; flag_idx++) {
     char *flags = TEST_FLAGS[flag_idx];
+    // TODO: add timeout
+    //"timeout", "--foreground", "1",
     cmd_append(&CMD, BIN_PATH, "--test-output");
     if (flags) {
       cmd_append(&CMD, flags);
@@ -100,10 +106,22 @@ bool run_test(String_View test_name, String_Builder *test_log) {
     if (!reason &&
         (expected_output.count != output.count ||
          memcmp(output.items, expected_output.items, output.count) != 0)) {
+      String_Builder msg = {0};
+
+      sb_appendf(&msg, "expected output:\n" SV_Fmt, SV_Arg(expected_output));
+      if (expected_output.count == 0 || da_last(&msg) != '\n')
+        sb_append_cstr(&msg, EOL_MARK);
+
+      sb_appendf(&msg, "output:\n" SV_Fmt, SV_Arg(sb_to_sv(output)));
+      if (output.count == 0 || da_last(&msg) != '\n')
+        sb_append_cstr(&msg, EOL_MARK);
+
+      char *output = temp_sprintf("output:\n" SV_Fmt, SV_Arg(sb_to_sv(msg)));
+
       reason = temp_sprintf("wrong output\n"
-                            "expected output:\n" SV_Fmt "\n"
-                            "output:\n" SV_Fmt "\n",
-                            SV_Arg(expected_output), SV_Arg(sb_to_sv(output)));
+                            "output:\n" SV_Fmt,
+                            SV_Arg(sb_to_sv(msg)));
+      sb_free(msg);
     }
 
     if (reason) {
