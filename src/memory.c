@@ -1,28 +1,31 @@
 #include <setjmp.h>
-#include <signal.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
-#if defined(__APPLE__)
+#ifdef __APPLE__
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
-#else  // defined(__APPLE__)
-#endif // defined(__APPLE__)
+#else  // __APPLE__
+#endif // __APPLE__
 
 #include "common.h"
 #include "memory.h"
-
-#include "../nob.h"
 
 uint8_t *TAPE_PTR = NULL;
 static uint8_t *LOW_GUARD = NULL;
 static uint8_t *HIGH_GUARD = NULL;
 static uint8_t *HIGHEST_GUARD = NULL;
 
+#ifndef NO_BOUNDS_CHECK
+
+#include <signal.h>
+
 static struct sigaction OLD_SEGV;
-#if defined(__APPLE__)
+#ifdef __APPLE__
 static struct sigaction OLD_BUS;
 #endif
+
+#endif // NO_BOUNDS_CHECK
 
 sigjmp_buf jump_env;
 
@@ -52,14 +55,16 @@ void get_tape_region(size_t pages) {
   NOB_ASSERT(mprotect(base + page_size, pages * page_size,
                       PROT_READ | PROT_WRITE) == 0);
 
+#ifndef NO_BOUNDS_CHECK
   struct sigaction sa = {0};
   sa.sa_sigaction = on_fault;
   sa.sa_flags = SA_SIGINFO;
   sigemptyset(&sa.sa_mask);
   sigaction(SIGSEGV, &sa, &OLD_SEGV);
-#if defined(__APPLE__)
+#ifdef __APPLE__
   sigaction(SIGBUS, &sa, &OLD_BUS);
 #endif
+#endif // NO_BOUNDS_CHECK
 
   LOW_GUARD = base;
   HIGH_GUARD = base + (1 + pages) * page_size;
@@ -68,10 +73,12 @@ void get_tape_region(size_t pages) {
 }
 
 void free_tape_region(void) {
+#ifndef NO_BOUNDS_CHECK
   sigaction(SIGSEGV, &OLD_SEGV, NULL);
-#if defined(__APPLE__)
+#ifdef __APPLE__
   sigaction(SIGBUS, &OLD_BUS, NULL);
 #endif
+#endif // NO_BOUNDS_CHECK
 
   NOB_ASSERT(munmap(LOW_GUARD, HIGHEST_GUARD - LOW_GUARD) == 0);
   LOW_GUARD = NULL;
@@ -81,27 +88,27 @@ void free_tape_region(void) {
 }
 
 void *copy_to_jit_region(void *code, size_t size) {
-#if defined(__APPLE__)
+#ifdef __APPLE__
   void *code_ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
                         MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-#else  // defined(__APPLE__)
+#else  // __APPLE__
   void *code_ptr = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-#endif // defined(__APPLE__)
+#endif // __APPLE__
   NOB_ASSERT(code_ptr != MAP_FAILED);
 
-#if defined(__APPLE__)
+#ifdef __APPLE__
   pthread_jit_write_protect_np(0);
-#endif // defined(__APPLE__)
+#endif // __APPLE__
 
   memcpy(code_ptr, code, size);
 
-#if defined(__APPLE__)
+#ifdef __APPLE__
   pthread_jit_write_protect_np(1);
   sys_icache_invalidate(code_ptr, size);
-#else  // defined(__APPLE__)
+#else  // __APPLE__
   __builtin___clear_cache(code_ptr, code_ptr + size);
-#endif // defined(__APPLE__)
+#endif // __APPLE__
   return code_ptr;
 }
 

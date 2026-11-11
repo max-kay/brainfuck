@@ -1,6 +1,3 @@
-#include <stdio.h>
-#include <string.h>
-
 #define NOB_STRIP_PREFIX
 #define NOB_NO_ECHO
 #define NOB_IMPLEMENTATION
@@ -183,12 +180,18 @@ int main(int argc, char **argv) {
 
   cmd_append(&CMD, "cc", "-Wall", "-Wextra", "-Wstrict-prototypes", "-Werror",
              "-o", BIN_PATH);
+
   if (debug) {
-    cmd_append(&CMD, "-O0", "-g");
+    // FIXME: make this work with different compilers
+    cmd_append(&CMD, "-DNO_BOUNDS_CHECK", "-O0", "-g",
+               "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+               "-fno-sanitize-recover=all");
   } else {
     cmd_append(&CMD, "-O3");
   }
-  cmd_append(&CMD, "src/main.c", "src/memory.c", "src/aarch64.c");
+  cmd_append(&CMD, "src/main.c", "src/aarch64.c", "src/frontend.c",
+             "src/interp.c", "src/ir.c", "src/ir_canon.c", "src/ir_opt.c",
+             "src/memory.c");
 
   if (!cmd_run(&CMD))
     return 1;

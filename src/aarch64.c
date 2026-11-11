@@ -1,12 +1,6 @@
 #if defined(__aarch64__) || defined(_M_ARM64)
 
-#include <stddef.h>
-#include <stdint.h>
-
 #include "backend.h"
-#include "common.h"
-
-#include "../nob.h"
 
 #if defined(__APPLE__)
 #define SYM(x) "_" #x // Mach-O prepends an underscore
@@ -44,7 +38,7 @@
 
 typedef uint32_t instr;
 
-static inline instr add_idx(size_t n) {
+static instr add_idx(size_t n) {
   // [sf=1]00100010[sh=0][imm12][xindx5][xindx5]
   if (n >= (1 << 12)) {
     TODO("allow the use of larger add using lsl 12");
@@ -54,7 +48,7 @@ static inline instr add_idx(size_t n) {
   return out;
 }
 
-static inline instr sub_idx(size_t n) {
+static instr sub_idx(size_t n) {
   // [sf=1]10100010[sh=0][imm12][xindx5][xindx5]
   if (n >= (1 << 12)) {
     TODO("allow the use of larger sub using lsl 12");
@@ -64,7 +58,7 @@ static inline instr sub_idx(size_t n) {
   return out;
 }
 
-static inline instr add_imm(uint8_t dst, uint8_t src, size_t n) {
+static instr add_imm(uint8_t dst, uint8_t src, size_t n) {
   // [sf=0]00100010[sh=0][imm12][src5][dst5]
   NOB_ASSERT(n < 1 << 12);
   NOB_ASSERT(src < 8);
@@ -76,8 +70,7 @@ static inline instr add_imm(uint8_t dst, uint8_t src, size_t n) {
   return out;
 }
 
-static inline instr add_reg_lsl(uint8_t dst, uint8_t a, uint8_t b,
-                                uint8_t lsl) {
+static instr add_reg_lsl(uint8_t dst, uint8_t a, uint8_t b, uint8_t lsl) {
   // [sf=0][op=0][S=0]01011[shift=00]0[Rm5][imm6=n][Rn5][Rd5]
   NOB_ASSERT(dst < 8);
   NOB_ASSERT(a < 8);
@@ -91,7 +84,7 @@ static inline instr add_reg_lsl(uint8_t dst, uint8_t a, uint8_t b,
   return out;
 }
 
-static inline instr negate(uint8_t dst, uint8_t src) {
+static instr negate(uint8_t dst, uint8_t src) {
   //[sf=0]1001011[shift2]0[src][imm6=000000]11111[dst5]
   NOB_ASSERT(dst < 8);
   NOB_ASSERT(src < 8);
@@ -101,7 +94,7 @@ static inline instr negate(uint8_t dst, uint8_t src) {
   return out;
 }
 
-// static inline instr mask(uint8_t dst, uint8_t src) {
+// static  instr mask(uint8_t dst, uint8_t src) {
 //   instr out = ENCODE_INSTR("and w0, w0, 0xFF");
 //   NOB_ASSERT(src < 8);
 //   NOB_ASSERT(dst < 8);
@@ -110,7 +103,7 @@ static inline instr negate(uint8_t dst, uint8_t src) {
 //   return out;
 // }
 
-static inline instr cbz(uint8_t reg) {
+static instr cbz(uint8_t reg) {
   // [sf=0]0110100[imm19][reg5]
   NOB_ASSERT(reg < 8);
   instr out = ENCODE_INSTR("cbz w0, 0");
@@ -118,7 +111,7 @@ static inline instr cbz(uint8_t reg) {
   return out;
 }
 
-static inline instr cbnz(uint8_t reg) {
+static instr cbnz(uint8_t reg) {
   // [sf=0]0110101[imm19][reg5]
   NOB_ASSERT(reg < 8);
   instr out = ENCODE_INSTR("cbnz w0, 0");
@@ -126,13 +119,13 @@ static inline instr cbnz(uint8_t reg) {
   return out;
 }
 
-static inline void link_cond_branch(instr *op, int64_t offset) {
+static void link_cond_branch(instr *op, int64_t offset) {
   // offset is 4 times bytelen or instruction count
   NOB_ASSERT(offset >= -(1 << 18) && offset < (1 << 18));
   *op |= ((uint32_t)offset & 0x7FFFF) << 5;
 }
 
-static inline instr ld_tape(uint8_t reg, int64_t offset) {
+static instr ld_tape(uint8_t reg, int64_t offset) {
   // 00111000010[imm9]00[xbase5][reg5]
   NOB_ASSERT(reg < 8);
   if (offset > 255 || offset < -256) {
@@ -145,7 +138,7 @@ static inline instr ld_tape(uint8_t reg, int64_t offset) {
   return out;
 }
 
-static inline instr str_tape(uint8_t reg, int64_t offset) {
+static instr str_tape(uint8_t reg, int64_t offset) {
   // 00111000000[imm9]00[xbase5][reg5]
   NOB_ASSERT(reg < 8);
   if (offset > 255 || offset < -256) {
@@ -158,7 +151,7 @@ static inline instr str_tape(uint8_t reg, int64_t offset) {
   return out;
 }
 
-static inline instr clear_tape(int64_t offset) {
+static instr clear_tape(int64_t offset) {
   // 00111000000[imm9]00[wzr5=11111][reg5]
   if (offset > 255 || offset < -256) {
     TODO("implement clear tape with larger offsets");
@@ -169,7 +162,7 @@ static inline instr clear_tape(int64_t offset) {
   return out;
 }
 
-static inline instr zero_reg(uint8_t reg) {
+static instr zero_reg(uint8_t reg) {
   // [sf=0]0101010000[wzr5=11111]00000011111[reg5];
   NOB_ASSERT(reg < 8);
   instr out = ENCODE_INSTR("mov w0, wzr");
@@ -177,9 +170,9 @@ static inline instr zero_reg(uint8_t reg) {
   return out;
 }
 
-static inline instr blr_putc(void) { return ENCODE_INSTR("blr " PUTC_REG_STR); }
+static instr blr_putc(void) { return ENCODE_INSTR("blr " PUTC_REG_STR); }
 
-static inline instr blr_getc(void) { return ENCODE_INSTR("blr " GETC_REG_STR); }
+static instr blr_getc(void) { return ENCODE_INSTR("blr " GETC_REG_STR); }
 
 typedef struct {
   instr *items;
