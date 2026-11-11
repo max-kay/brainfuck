@@ -1,3 +1,4 @@
+#include "common.h"
 #if defined(__aarch64__) || defined(_M_ARM64)
 
 #include "backend.h"
@@ -258,9 +259,14 @@ Code translate_to_code(Intermediate *ir) {
           da_append(&code, add_reg_lsl(acc, acc, tape_val, lsl));
         }
       }
+      size_t branch_inst = code.count;
+      da_append(&code, cbz(acc));
+
       da_append(&code, ld_tape(tape_val, op.as.mad.dst_offset));
       da_append(&code, add_reg_lsl(tape_val, acc, tape_val, 0));
       da_append(&code, str_tape(tape_val, op.as.mad.dst_offset));
+
+      link_cond_branch(&code.items[branch_inst], code.count - branch_inst);
       break;
     }
 

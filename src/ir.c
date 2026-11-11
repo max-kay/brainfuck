@@ -1,5 +1,57 @@
 #include "ir.h"
 
+Footprint op_footprint(Operation op) {
+  Footprint f = {0};
+  switch (op.kind) {
+  case OP_NOP:
+    break;
+  case OP_ADD:
+    f.has_add = true;
+    f.add_offset = op.as.add.offset;
+    break;
+  case OP_NEG:
+    f.has_read = true;
+    f.read_offset = op.as.neg.offset;
+    f.has_write = true;
+    f.write_offset = op.as.neg.offset;
+    break;
+  case OP_CLR:
+    f.has_write = true;
+    f.write_offset = op.as.clr.offset;
+    break;
+  case OP_MUL:
+    TODO("mul");
+    break;
+  case OP_MAD:
+    f.has_read = true;
+    f.read_offset = op.as.mad.src_offset;
+    f.has_add = true;
+    f.add_offset = op.as.mad.dst_offset;
+    break;
+  case OP_PCH:
+    f.has_read = true;
+    f.read_offset = op.as.pch.offset;
+    f.io = true;
+    break;
+  case OP_GCH:
+    f.has_write = true;
+    f.write_offset = op.as.gch.offset;
+    f.io = true;
+    break;
+  case OP_MOV:
+    UNREACHABLE("mov instructions have no well defined footprint");
+  case OP_LSTART:
+  case OP_LEND:
+    UNREACHABLE("loop instructions have no well defined footprint");
+  }
+  return f;
+}
+
+bool fp_touches(Footprint fp, int64_t offset) {
+  return (fp.has_write && fp.write_offset == offset) ||
+         (fp.has_read && fp.read_offset == offset) ||
+         (fp.has_add && fp.add_offset == offset);
+}
 static const char *fmt_off(int64_t off) {
   return temp_sprintf("^%" PRId64, off);
 }
@@ -89,6 +141,8 @@ void ir_optimize(Intermediate *ir) {
   CS_Array new_segments = {0};
 
   size_t pass = 0;
+  size_t loop_eliminations = 0;
+  size_t old_count = ir->count;
   bool changed = false;
   do {
     if (DEBUG_INFO) {
@@ -108,7 +162,9 @@ void ir_optimize(Intermediate *ir) {
       debug_cmp_segments(&segments, &new_segments);
     }
 
-    changed = eliminate_loops(new_ir);
+    size_t loops_elim = eliminate_loops(new_ir);
+    changed = (loops_elim != 0);
+    loop_eliminations += loops_elim;
 
     Intermediate temp = *new_ir;
     *new_ir = *ir;
@@ -116,60 +172,14 @@ void ir_optimize(Intermediate *ir) {
     pass++;
   } while (changed);
 
+  if (STATS) {
+    fprintf(stderr, "\nOptimized IR\n");
+    fprintf(stderr, "  old instruction count: %*zu\n", 6, old_count);
+    fprintf(stderr, "  new instruction count: %*zu\n", 6, ir->count);
+    fprintf(stderr, "  eliminated %zu loops in %zu\n", loop_eliminations, pass);
+  }
+
   da_free(new_segments);
   da_free(segments);
   da_free(*new_ir);
-}
-
-Footprint op_footprint(Operation op) {
-  Footprint f = {0};
-  switch (op.kind) {
-  case OP_NOP:
-    break;
-  case OP_ADD:
-    f.has_add = true;
-    f.add_offset = op.as.add.offset;
-    break;
-  case OP_NEG:
-    f.has_read = true;
-    f.read_offset = op.as.neg.offset;
-    f.has_write = true;
-    f.write_offset = op.as.neg.offset;
-    break;
-  case OP_CLR:
-    f.has_write = true;
-    f.write_offset = op.as.clr.offset;
-    break;
-  case OP_MUL:
-    TODO("mul");
-    break;
-  case OP_MAD:
-    f.has_read = true;
-    f.read_offset = op.as.mad.src_offset;
-    f.has_add = true;
-    f.add_offset = op.as.mad.dst_offset;
-    break;
-  case OP_PCH:
-    f.has_read = true;
-    f.read_offset = op.as.pch.offset;
-    f.io = true;
-    break;
-  case OP_GCH:
-    f.has_write = true;
-    f.write_offset = op.as.gch.offset;
-    f.io = true;
-    break;
-  case OP_MOV:
-    UNREACHABLE("mov instructions have no well defined footprint");
-  case OP_LSTART:
-  case OP_LEND:
-    UNREACHABLE("loop instructions have no well defined footprint");
-  }
-  return f;
-}
-
-bool fp_touches(Footprint fp, int64_t offset) {
-  return (fp.has_write && fp.write_offset == offset) ||
-         (fp.has_read && fp.read_offset == offset) ||
-         (fp.has_add && fp.add_offset == offset);
 }

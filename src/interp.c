@@ -27,17 +27,23 @@ void ir_interpret(Intermediate *ir) {
       *(tape_ptr + op.as.clr.offset) = 0;
       instruction_ptr++;
       break;
-    case OP_MAD:
-      *(tape_ptr + op.as.mad.dst_offset) +=
-          *(tape_ptr + op.as.mad.src_offset) * op.as.mad.factor;
+    case OP_MAD: {
+      uint8_t result = *(tape_ptr + op.as.mad.src_offset) * op.as.mad.factor;
+      if (result != 0) {
+        *(tape_ptr + op.as.mad.dst_offset) += result;
+      }
       instruction_ptr++;
       break;
-    case OP_MUL:
-      *(tape_ptr + op.as.mul.dst_offset) +=
-          *(tape_ptr + op.as.mul.src1_offset) *
-          *(tape_ptr + op.as.mul.src2_offset) * op.as.mul.factor;
+    }
+    case OP_MUL: {
+      uint8_t result = *(tape_ptr + op.as.mul.src1_offset) *
+                       *(tape_ptr + op.as.mul.src2_offset) * op.as.mul.factor;
+      if (result != 0) {
+        *(tape_ptr + op.as.mul.dst_offset) += result;
+      }
       instruction_ptr++;
       break;
+    }
 
     case OP_MOV:
       tape_ptr += op.as.mov.summand;

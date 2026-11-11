@@ -253,28 +253,20 @@ int main(int argc, char **argv) {
   end = clock();
 
   if (STATS) {
-    fprintf(stderr, "Intermediate Representation\n");
+    fprintf(stderr, "\nIntermediate Representation\n");
     fprintf(stderr, "  %zu instructions\n", ir.count);
     fprintf(stderr, "  ran for ");
     pprint_clock(end - start);
     fprintf(stderr, "\n");
-    fprintf(stderr, "\n");
   }
 
   if (OPTIMIZE) {
-    size_t old_count = ir.count;
     start = clock();
     ir_optimize(&ir);
     end = clock();
     if (STATS) {
-      fprintf(stderr, "\n");
-      fprintf(stderr, "Optimized IR\n");
-      fprintf(stderr, "  old instruction count: %*zu\n", 6, old_count);
-      fprintf(stderr, "  new instruction count: %*zu\n", 6, ir.count);
       fprintf(stderr, "  ran for ");
       pprint_clock(end - start);
-      fprintf(stderr, "\n");
-
       fprintf(stderr, "\n");
     }
   }
@@ -292,7 +284,7 @@ int main(int argc, char **argv) {
     Code code = translate_to_code(&ir);
     end = clock();
     if (STATS) {
-      fprintf(stderr, "JIT compilation\n");
+      fprintf(stderr, "\nJIT compilation\n");
       // TODO: only valid for aarch64
       fprintf(stderr, "  %zu instructions\n", code.size / 4);
       fprintf(stderr, "  compiled in ");

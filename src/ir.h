@@ -96,7 +96,7 @@ void cs_canonicalize(Code_Segment segment, Intermediate *new_ir);
 
 void ir_segment(Intermediate *ir, CS_Array *segments);
 
-bool eliminate_loops(Intermediate *ir);
+size_t eliminate_loops(Intermediate *ir);
 
 void debug_cmp_segments(CS_Array *seg1, CS_Array *seg2);
 

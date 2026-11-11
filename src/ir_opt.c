@@ -126,8 +126,8 @@ static bool eliminate_innermost_loop(Operation *items, size_t start,
   return true;
 }
 
-bool eliminate_loops(Intermediate *ir) {
-  return false;
+size_t eliminate_loops(Intermediate *ir) {
+  // return false;
   // FIXME: when eliminating the loop the zero check is removed
   // which is fine for instruction which are nop for ^0 == 0
   // but if this is not true the op is run irregardless of wether ^0 is zero
@@ -174,5 +174,5 @@ bool eliminate_loops(Intermediate *ir) {
     fprintf(stderr, "\nhad %zu eliminations\n", eliminations);
   }
   sb_free(debug_output);
-  return eliminations != 0;
+  return eliminations;
 }
