@@ -13,7 +13,8 @@ enum LoopKind {
 //   - the op at start+1 < i < end is not LSTART nor LEND
 //   - the segment is canonicalized
 //
-bool eliminate_innermost_loop(Operation *items, size_t start, size_t end) {
+static bool eliminate_innermost_loop(Operation *items, size_t start,
+                                     size_t end) {
   NOB_ASSERT(items[start].kind = OP_LSTART);
   NOB_ASSERT(items[end].kind = OP_LEND);
   enum LoopKind loop_kind = LK_NONE;

@@ -24,7 +24,7 @@ size_t TAPE_PAGES = 1;
 
 Bf_Result RESULT = Bf_R_Ok;
 
-void print_result(void) {
+static void print_result(void) {
   switch (RESULT) {
   case Bf_R_Ok:
     break;
@@ -74,7 +74,7 @@ static void reset_terminal(void) {
   tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
 }
 
-void run_on_jit(Code code) {
+static void run_on_jit(Code code) {
   jit_fn_type code_ptr = copy_to_jit_region(code.ptr, code.size);
 
   get_tape_region(TAPE_PAGES);
@@ -85,7 +85,7 @@ void run_on_jit(Code code) {
   free_jit_region(code_ptr, code.size);
 }
 
-void print_usage(char *pname) {
+static void print_usage(char *pname) {
   fprintf(stderr, "Usage %s FLAGS <filename.bf>\n", pname);
   fprintf(stderr, "   --interpret-ir   -i     interpret ir directly\n");
   fprintf(stderr, "   --optimize       -o     optimize code\n");
@@ -100,7 +100,7 @@ void print_usage(char *pname) {
   fprintf(stderr, "   --debug          -d     print debug output\n");
 }
 
-bool parse_size(char *s, size_t *num) {
+static bool parse_size(char *s, size_t *num) {
   char *endptr;
   errno = 0;
 
@@ -120,7 +120,7 @@ bool parse_size(char *s, size_t *num) {
   return true;
 }
 
-char *parse_args(int argc, char **argv) {
+static char *parse_args(int argc, char **argv) {
   char *p_name = *argv;
   shift(argv, argc);
 
@@ -199,7 +199,7 @@ char *parse_args(int argc, char **argv) {
   return *argv;
 }
 
-void pprint_clock(clock_t elapsed) {
+static void pprint_clock(clock_t elapsed) {
   if (elapsed >= 60 * CLOCKS_PER_SEC) {
     size_t mins = elapsed / (60 * CLOCKS_PER_SEC);
     size_t secs = (elapsed - mins * (60 * CLOCKS_PER_SEC)) / CLOCKS_PER_SEC;

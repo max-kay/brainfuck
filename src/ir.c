@@ -1,19 +1,9 @@
-#include <inttypes.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
-
-#include "../nob.h"
-
-#include "common.h"
-
 #include "ir.h"
 
 static const char *fmt_off(int64_t off) {
   return temp_sprintf("^%" PRId64, off);
 }
 
-#define OP_FMT_LEN 30
 char *fmt_op(Operation op) {
   switch (op.kind) {
   case OP_MOV:

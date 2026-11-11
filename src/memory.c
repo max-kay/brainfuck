@@ -29,7 +29,7 @@ static struct sigaction OLD_BUS;
 
 sigjmp_buf jump_env;
 
-void on_fault(int sig, siginfo_t *info, void *uctx) {
+static void on_fault(int sig, siginfo_t *info, void *uctx) {
   UNUSED(sig);
   UNUSED(uctx);
   if (TAPE_PTR == NULL) {

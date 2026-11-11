@@ -1,9 +1,7 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <inttypes.h>
 
 #define NOB_STRIP_PREFIX
 #include "../nob.h"
@@ -34,10 +32,5 @@ typedef struct {
   size_t count;
   size_t capacity;
 } Index_Array;
-
-typedef struct {
-  void *ptr;
-  size_t size;
-} Code;
 
 #endif // COMMON_H

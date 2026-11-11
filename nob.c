@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
                "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                "-fno-sanitize-recover=all");
   } else {
-    cmd_append(&CMD, "-O3");
+    cmd_append(&CMD, "-O3", "-flto");
   }
   cmd_append(&CMD, "src/main.c", "src/aarch64.c", "src/frontend.c",
              "src/interp.c", "src/ir.c", "src/ir_canon.c", "src/ir_opt.c",

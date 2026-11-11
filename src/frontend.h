@@ -17,8 +17,6 @@ typedef enum {
   TOK_END,
 } Token;
 
-Token get_next(String_View *sv);
-
 bool parse_bf(String_View iter, Intermediate *ir);
 
 #endif // FRONTEND_H

@@ -4,6 +4,11 @@
 #include "common.h"
 #include "ir.h"
 
+typedef struct {
+  void *ptr;
+  size_t size;
+} Code;
+
 Code translate_to_code(Intermediate *ir);
 
 typedef int (*putchar_type)(int);

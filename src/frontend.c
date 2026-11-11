@@ -1,5 +1,6 @@
 #include "frontend.h"
-Token get_next(String_View *sv) {
+
+static Token get_next(String_View *sv) {
   while ((sv->count--) > 0) {
     switch (*(sv->items++)) {
     case '>':
