@@ -25,8 +25,6 @@ static struct sigaction OLD_SEGV;
 static struct sigaction OLD_BUS;
 #endif
 
-#endif // NO_BOUNDS_CHECK
-
 sigjmp_buf jump_env;
 
 static void on_fault(int sig, siginfo_t *info, void *uctx) {
@@ -46,6 +44,8 @@ static void on_fault(int sig, siginfo_t *info, void *uctx) {
   }
   siglongjmp(jump_env, 1);
 }
+
+#endif // NO_BOUNDS_CHECK
 
 void get_tape_region(size_t pages) {
   size_t page_size = getpagesize();

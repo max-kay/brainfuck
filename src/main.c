@@ -238,8 +238,10 @@ int main(int argc, char **argv) {
   clock_t start;
   clock_t end;
 
+#ifndef NO_BOUNDS_CHECK
   if (SETUP_FAULT_JUMP() != 0)
     goto error;
+#endif // NO_BOUNDS_CHECK
 
   Intermediate ir = {0};
 
