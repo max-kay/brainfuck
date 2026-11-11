@@ -1,9 +1,79 @@
 #include "ir.h"
 
+typedef struct {
+  bool has_read, has_read2, has_write, has_add, io;
+  int64_t read_offset, read2_offset, write_offset, add_offset;
+} Footprint;
+
+Footprint op_footprint(Operation op) {
+  Footprint f = {0};
+  switch (op.kind) {
+  case OP_NOP:
+    break;
+  case OP_ADD:
+    f.has_add = true;
+    f.add_offset = op.as.add.offset;
+    break;
+  case OP_NEG:
+    f.has_read = true;
+    f.read_offset = op.as.neg.offset;
+    f.has_write = true;
+    f.write_offset = op.as.neg.offset;
+    break;
+  case OP_CLR:
+    f.has_write = true;
+    f.write_offset = op.as.clr.offset;
+    break;
+  case OP_MUL:
+    f.has_read = true;
+    f.read_offset = op.as.mul.src1_offset;
+    f.has_read2 = true;
+    f.read2_offset = op.as.mul.src2_offset;
+    f.has_add = true;
+    f.add_offset = op.as.mul.dst_offset;
+    break;
+    break;
+  case OP_MAD:
+    f.has_read = true;
+    f.read_offset = op.as.mad.src_offset;
+    f.has_add = true;
+    f.add_offset = op.as.mad.dst_offset;
+    break;
+  case OP_PCH:
+    f.has_read = true;
+    f.read_offset = op.as.pch.offset;
+    f.io = true;
+    break;
+  case OP_GCH:
+    f.has_write = true;
+    f.write_offset = op.as.gch.offset;
+    f.io = true;
+    break;
+  case OP_MOV:
+    UNREACHABLE("mov instructions have no well defined footprint");
+  case OP_CENTR:
+  case OP_CEXIT:
+    UNREACHABLE("loop instructions have no well defined footprint");
+  case OP_LENTR:
+  case OP_LEXIT:
+    UNREACHABLE("loop instructions have no well defined footprint");
+  }
+  return f;
+}
+
+static bool fp_touches(Footprint fp, int64_t offset) {
+  return (fp.has_write && fp.write_offset == offset) ||
+         (fp.has_read && fp.read_offset == offset) ||
+         (fp.has_read2 && fp.read2_offset == offset) ||
+         (fp.has_add && fp.add_offset == offset);
+}
+
 static bool op_commute(Operation a, Operation b) {
   switch (a.kind) {
-  case OP_LSTART:
-  case OP_LEND:
+  case OP_CENTR:
+  case OP_CEXIT:
+  case OP_LENTR:
+  case OP_LEXIT:
   case OP_MOV:
     return false;
   case OP_NOP:
@@ -12,8 +82,10 @@ static bool op_commute(Operation a, Operation b) {
     break;
   }
   switch (b.kind) {
-  case OP_LSTART:
-  case OP_LEND:
+  case OP_CENTR:
+  case OP_CEXIT:
+  case OP_LENTR:
+  case OP_LEXIT:
   case OP_MOV:
     return false;
   case OP_NOP:
@@ -29,9 +101,12 @@ static bool op_commute(Operation a, Operation b) {
     return false;
   if (fa.has_read && fp_touches(fb, fa.read_offset))
     return false;
+  if (fa.has_read && fp_touches(fb, fa.read_offset))
+    return false;
   if (fa.has_add) {
     if ((fb.has_write && fb.write_offset == fa.add_offset) ||
-        (fb.has_read && fb.read_offset == fa.add_offset)) {
+        (fb.has_read && fb.read_offset == fa.add_offset) ||
+        (fb.has_read2 && fb.read2_offset == fa.add_offset)) {
       return false;
     }
   }
@@ -111,8 +186,15 @@ static int64_t collect_moves(Operation *items, size_t count,
       op.as.gch.offset += current_offset;
       da_append(new_ir, op);
       break;
-    case OP_LSTART:
-    case OP_LEND:
+    case OP_CENTR:
+      op.as.centr.offset += current_offset;
+      da_append(new_ir, op);
+      break;
+    case OP_CEXIT:
+      da_append(new_ir, op);
+      break;
+    case OP_LENTR:
+    case OP_LEXIT:
       UNREACHABLE("never in basic block");
     }
   }
@@ -189,8 +271,10 @@ static bool op_combine(Operation *a, Operation *b) {
     return false;
   case OP_NOP:
   case OP_MOV:
-  case OP_LSTART:
-  case OP_LEND:
+  case OP_LENTR:
+  case OP_LEXIT:
+  case OP_CENTR:
+  case OP_CEXIT:
     UNREACHABLE("invalid operation while combining operations");
   }
   return false;
@@ -249,6 +333,8 @@ void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
   size_t new_count = combine_ops(&new_ir->items[start], new_ir->count - start);
   new_ir->count = start + new_count;
 
+  // TODO: deal with conditonals which have no MOV operations
+
   if (offset != 0) {
     Operation move = (Operation){.kind = OP_MOV, .as.mov.summand = offset};
     da_append(new_ir, move);
@@ -263,8 +349,10 @@ void ir_segment(Intermediate *ir, CS_Array *segments) {
   for (size_t i = 0; i < ir->count; i++) {
     Operation op = ir->items[i];
     switch (op.kind) {
-    case OP_LSTART:
-    case OP_LEND:
+    case OP_LENTR:
+    case OP_LEXIT:
+    case OP_CENTR:
+    case OP_CEXIT:
       if (i - current_start != 0) {
         segment = (Code_Segment){
             .items = &ir->items[current_start],

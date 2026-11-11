@@ -5,10 +5,13 @@ void ir_interpret(Intermediate *ir) {
   size_t instruction_ptr = 0;
   Index_Array jump_back = {0};
 
+  size_t instructions_executed = 0;
+
   get_tape_region(TAPE_PAGES);
   uint8_t *tape_ptr = TAPE_PTR;
 
   while (instruction_ptr < ir->count) {
+    instructions_executed++;
     Operation op = ir->items[instruction_ptr];
     switch (op.kind) {
     case OP_NOP:
@@ -59,15 +62,15 @@ void ir_interpret(Intermediate *ir) {
       instruction_ptr++;
       break;
 
-    case OP_LSTART:
+    case OP_LENTR:
       if (*tape_ptr == 0) {
-        size_t lstarts = 1;
-        while (lstarts != 0) {
+        size_t lentrs = 1;
+        while (lentrs != 0) {
           instruction_ptr++;
-          if (ir->items[instruction_ptr].kind == OP_LSTART) {
-            lstarts++;
-          } else if (ir->items[instruction_ptr].kind == OP_LEND) {
-            lstarts--;
+          if (ir->items[instruction_ptr].kind == OP_LENTR) {
+            lentrs++;
+          } else if (ir->items[instruction_ptr].kind == OP_LEXIT) {
+            lentrs--;
           }
         }
         instruction_ptr++;
@@ -76,7 +79,7 @@ void ir_interpret(Intermediate *ir) {
         da_append(&jump_back, instruction_ptr);
       }
       break;
-    case OP_LEND:
+    case OP_LEXIT:
       if (*tape_ptr != 0) {
         instruction_ptr = da_last(&jump_back);
       } else {
@@ -84,8 +87,36 @@ void ir_interpret(Intermediate *ir) {
         instruction_ptr++;
       }
       break;
+
+    case OP_CENTR:
+      if (*tape_ptr == 0) {
+        size_t centrs = 1;
+        while (centrs != 0) {
+          instruction_ptr++;
+          if (ir->items[instruction_ptr].kind == OP_CENTR) {
+            centrs++;
+          } else if (ir->items[instruction_ptr].kind == OP_CEXIT) {
+            centrs--;
+          }
+        }
+        instruction_ptr++;
+      } else {
+        instruction_ptr++;
+      }
+      break;
+    case OP_CEXIT:
+      instruction_ptr++;
+      break;
     }
   }
+  if (STATS) {
+    fprintf(stderr, "\n");
+    fprintf(stderr, "IR interpretation\n");
+    fprintf(stderr, "  instructions executed: %zu\n", instructions_executed);
+  }
 
+  NOB_ASSERT(jump_back.count == 0);
+
+  da_free(jump_back);
   free_tape_region();
 }

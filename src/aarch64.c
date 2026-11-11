@@ -1,4 +1,6 @@
 #include "common.h"
+#include "ir.h"
+#include <stdio.h>
 #if defined(__aarch64__) || defined(_M_ARM64)
 
 #include "backend.h"
@@ -198,7 +200,9 @@ ENCODE_ASM("  ldp " TAPE_REG_STR ", " UNUSED_REG_STR ", [sp, 16]\n"
 
 Code translate_to_code(Intermediate *ir) {
   Instructions code = {0};
+  // TODO: fuse these lists maybe?
   Index_Array loop_enter_idxs = {0};
+  Index_Array cond_enter_idxs = {0};
   da_append_many(&code, PRELUDE_START, PRELUDE_END - PRELUDE_START);
 
   for (size_t i = 0; i < ir->count; i++) {
@@ -259,14 +263,9 @@ Code translate_to_code(Intermediate *ir) {
           da_append(&code, add_reg_lsl(acc, acc, tape_val, lsl));
         }
       }
-      size_t branch_inst = code.count;
-      da_append(&code, cbz(acc));
-
       da_append(&code, ld_tape(tape_val, op.as.mad.dst_offset));
       da_append(&code, add_reg_lsl(tape_val, acc, tape_val, 0));
       da_append(&code, str_tape(tape_val, op.as.mad.dst_offset));
-
-      link_cond_branch(&code.items[branch_inst], code.count - branch_inst);
       break;
     }
 
@@ -274,12 +273,24 @@ Code translate_to_code(Intermediate *ir) {
       TODO("mul");
       break;
 
-    case OP_LSTART:
+    case OP_CENTR:
+      da_append(&code, ld_tape(0, op.as.centr.offset));
+      da_append(&code, cbz(0));
+      da_append(&cond_enter_idxs, code.count - 1);
+      break;
+    case OP_CEXIT: {
+      int64_t current_instr = code.count;
+      int64_t branch_idx = da_pop(&cond_enter_idxs);
+      link_cond_branch(&code.items[branch_idx], current_instr - branch_idx);
+      break;
+    }
+
+    case OP_LENTR:
       da_append(&code, ld_tape(0, 0));
       da_append(&code, cbz(0));
       da_append(&loop_enter_idxs, code.count - 1);
       break;
-    case OP_LEND:
+    case OP_LEXIT: {
       da_append(&code, ld_tape(0, 0));
       int64_t upper_b_idx = (int64_t)code.count;
       da_append(&code, cbnz(0));
@@ -293,8 +304,16 @@ Code translate_to_code(Intermediate *ir) {
                        (lower_b_idx + 1) - upper_b_idx);
       break;
     }
+    }
   }
   da_append_many(&code, POSTLUDE_START, POSTLUDE_END - POSTLUDE_START);
+
+  NOB_ASSERT(loop_enter_idxs.count == 0);
+  NOB_ASSERT(cond_enter_idxs.count == 0);
+
+  da_free(loop_enter_idxs);
+  da_free(cond_enter_idxs);
+
   return (Code){
       .ptr = code.items,
       .size = sizeof(code.items[0]) * code.count,

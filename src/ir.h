@@ -6,15 +6,20 @@
 typedef enum {
   OP_NOP = 0,
   OP_MOV,
+
   OP_ADD,
   OP_NEG,
   OP_CLR,
   OP_MAD,
   OP_MUL,
+
   OP_PCH,
   OP_GCH,
-  OP_LSTART,
-  OP_LEND,
+
+  OP_LENTR,
+  OP_LEXIT,
+  OP_CENTR,
+  OP_CEXIT,
 } Op_Kind;
 
 typedef struct {
@@ -54,9 +59,14 @@ typedef struct {
       int64_t offset;
     } pch;
     struct {
-    } lstart;
+    } lentr;
     struct {
-    } lend;
+    } lexit;
+    struct {
+      int64_t offset;
+    } centr;
+    struct {
+    } cexit;
     int64_t offset;
   } as;
 } Operation;
@@ -66,14 +76,6 @@ typedef struct {
   size_t count;
   size_t capacity;
 } Intermediate;
-
-typedef struct {
-  bool has_read, has_write, has_add, io;
-  int64_t read_offset, write_offset, add_offset;
-} Footprint;
-
-Footprint op_footprint(Operation op);
-bool fp_touches(Footprint fp, int64_t offset);
 
 typedef struct {
   Operation *items;

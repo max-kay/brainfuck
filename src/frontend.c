@@ -35,7 +35,7 @@ bool parse_bf(String_View iter, Intermediate *ir) {
     operation = (Operation){0};
     switch (token) {
     case TOK_JUMP_FORWARD:
-      operation = (Operation){.kind = OP_LSTART};
+      operation = (Operation){.kind = OP_LENTR};
       da_append(ir, operation);
       open_loops++;
       break;
@@ -45,7 +45,7 @@ bool parse_bf(String_View iter, Intermediate *ir) {
         goto error;
       }
       open_loops--;
-      operation = (Operation){.kind = OP_LEND};
+      operation = (Operation){.kind = OP_LEXIT};
       da_append(ir, operation);
       break;
 

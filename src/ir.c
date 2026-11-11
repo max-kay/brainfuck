@@ -1,57 +1,5 @@
 #include "ir.h"
 
-Footprint op_footprint(Operation op) {
-  Footprint f = {0};
-  switch (op.kind) {
-  case OP_NOP:
-    break;
-  case OP_ADD:
-    f.has_add = true;
-    f.add_offset = op.as.add.offset;
-    break;
-  case OP_NEG:
-    f.has_read = true;
-    f.read_offset = op.as.neg.offset;
-    f.has_write = true;
-    f.write_offset = op.as.neg.offset;
-    break;
-  case OP_CLR:
-    f.has_write = true;
-    f.write_offset = op.as.clr.offset;
-    break;
-  case OP_MUL:
-    TODO("mul");
-    break;
-  case OP_MAD:
-    f.has_read = true;
-    f.read_offset = op.as.mad.src_offset;
-    f.has_add = true;
-    f.add_offset = op.as.mad.dst_offset;
-    break;
-  case OP_PCH:
-    f.has_read = true;
-    f.read_offset = op.as.pch.offset;
-    f.io = true;
-    break;
-  case OP_GCH:
-    f.has_write = true;
-    f.write_offset = op.as.gch.offset;
-    f.io = true;
-    break;
-  case OP_MOV:
-    UNREACHABLE("mov instructions have no well defined footprint");
-  case OP_LSTART:
-  case OP_LEND:
-    UNREACHABLE("loop instructions have no well defined footprint");
-  }
-  return f;
-}
-
-bool fp_touches(Footprint fp, int64_t offset) {
-  return (fp.has_write && fp.write_offset == offset) ||
-         (fp.has_read && fp.read_offset == offset) ||
-         (fp.has_add && fp.add_offset == offset);
-}
 static const char *fmt_off(int64_t off) {
   return temp_sprintf("^%" PRId64, off);
 }
@@ -85,10 +33,15 @@ char *fmt_op(Operation op) {
   case OP_GCH:
     return temp_sprintf("GCH    %5s %5s %5s %5s", fmt_off(op.as.gch.offset), "",
                         "", "");
-  case OP_LSTART:
-    return temp_sprintf("LSTART %5s %5s %5s %5s", "", "", "", "");
-  case OP_LEND:
-    return temp_sprintf("LEND   %5s %5s %5s %5s", "", "", "", "");
+  case OP_LENTR:
+    return temp_sprintf("LENTR  %5s %5s %5s %5s", "", "", "", "");
+  case OP_LEXIT:
+    return temp_sprintf("LEXIT  %5s %5s %5s %5s", "", "", "", "");
+  case OP_CENTR:
+    return temp_sprintf("CENTR  %5s %5s %5s %5s", fmt_off(op.as.centr.offset),
+                        "", "", "");
+  case OP_CEXIT:
+    return temp_sprintf("CEXIT  %5s %5s %5s %5s", "", "", "", "");
   case OP_NOP:
     return temp_sprintf("NOP    %5s %5s %5s %5s", "", "", "", "");
   }
@@ -176,7 +129,8 @@ void ir_optimize(Intermediate *ir) {
     fprintf(stderr, "\nOptimized IR\n");
     fprintf(stderr, "  old instruction count: %*zu\n", 6, old_count);
     fprintf(stderr, "  new instruction count: %*zu\n", 6, ir->count);
-    fprintf(stderr, "  eliminated %zu loops in %zu\n", loop_eliminations, pass);
+    fprintf(stderr, "  eliminated loops:      %*zu\n", 6, loop_eliminations);
+    fprintf(stderr, "  passes:                %*zu\n", 6, pass);
   }
 
   da_free(new_segments);

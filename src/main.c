@@ -83,6 +83,10 @@ static void run_on_jit(Code code) {
 
   free_tape_region();
   free_jit_region(code_ptr, code.size);
+  if (STATS) {
+    fprintf(stderr, "\n");
+    fprintf(stderr, "JIT program\n");
+  }
 }
 
 static void print_usage(char *pname) {
@@ -299,11 +303,8 @@ int main(int argc, char **argv) {
     free(code.ptr);
 
     if (STATS) {
-      fprintf(stderr, "\n");
-      fprintf(stderr, "JIT program\n");
       fprintf(stderr, "  ran for ");
       pprint_clock(end - start);
-      fprintf(stderr, "\n");
       fprintf(stderr, "\n");
     }
     if (RESULT != Bf_R_Ok) {
@@ -316,11 +317,8 @@ int main(int argc, char **argv) {
     ir_interpret(&ir);
     end = clock();
     if (STATS) {
-      fprintf(stderr, "\n");
-      fprintf(stderr, "IR interpretation\n");
       fprintf(stderr, "  ran for ");
       pprint_clock(end - start);
-      fprintf(stderr, "\n");
       fprintf(stderr, "\n");
     }
 
