@@ -163,13 +163,19 @@ The operations of the IR are shown in @ir-instructions.
     [```tir ADD ^off imm```], [add `imm` to the value at tape pointer + `off`], [```c *(t_ptr + off) += imm;```],
     [```tir MOV imm```], [move the tape pointer by `imm`], [```c t_ptr += imm;```],
 
-    [```tir LSTART```],
-    [jump forward to the instruction after the matching `LEND` if the value at the tape pointer is zero],
+    [```tir LENTR```],
+    [jump forward to the instruction after the matching `LEXIT` if the value at the tape pointer is zero],
     [```c while (*t_ptr != 0) {```],
 
-    [```tir LEND```],
-    [jump backward to the instruction after the matching `LSTART` if the value at the tape pointer is non-zero],
+    [```tir LEXIT```],
+    [jump backward to the instruction after the matching `LENTR` if the value at the tape pointer is non-zero],
     [```c }```],
+
+    [```tir CENTR ^off```],
+    [jump forward to the instruction after the matching `CEXIT` if the value at the tape pointer + `off` is zero],
+    [```c if (*(t_ptr + off) != 0) {```],
+
+    [```tir CEXIT```], [do nothing, this is just the target for the `CENTR` instruction], [```c }```],
 
     [```tir PCH ^off```], [output the value at tape pointer + `off`], [```c putchar(*(t_ptr + off));```],
     [```tir GCH ^off```],
@@ -208,9 +214,9 @@ The operations of the IR are shown in @ir-instructions.
     [`>`], [```tir MOV      1```],
     [`<`], [```tir MOV     -1```],
 
-    [`[`], [```tir LSTART ```],
+    [`[`], [```tir LENTR ```],
 
-    [`]`], [```tir LEND``` ],
+    [`]`], [```tir LEXIT``` ],
 
     [`.`], [```tir PCH     ^0```],
     [`,`], [```tir GCH     ^0```],
@@ -222,7 +228,7 @@ The operations of the IR are shown in @ir-instructions.
 
 = Canonicalization of Basic Blocks
 
-A basic block is a segment of IR which does not contain any of `LSTART`, `LEND`.
+A basic block is a segment of IR which does not contain any of `LENTR`, `LEXIT`, `CENTR`, `CEXIT`.
 Canonicalization of such blocks happends in three stages.
 - collecting the `MOV`-operations into one.
 - sorting the operations
@@ -262,31 +268,59 @@ The IO-operations `PCH` and `GCH` never commute.
 
 The commutativity of the other instructions can be determined from their foot print.
 
-== Combining Operations
+== Combining and Eliminating Operations
 
+After sorting, operations on the same offset are adjacent unless a
+non-commuting operation separates them. Adjacent operations `a; b` with
+the same destination offset are merged according to @combine-rules.
+A `NOP` produced by merging is removed in the same pass.
+
+#figure(
+  table(
+    columns: 3,
+    align: left,
+    [*First*], [*Second*], [*Result*],
+    [```tir ADD ^o x```], [```tir ADD ^o y```], [```tir ADD ^o x+y``` (`NOP` if `x+y` is 0)],
+    [```tir ADD ^o x```], [```tir CLR ^o``` / ```tir GCH ^o```], [second operation only],
+    [```tir NEG ^o```], [```tir NEG ^o```], [`NOP`],
+    [```tir NEG ^o```], [```tir CLR ^o``` / ```tir GCH ^o```], [second operation only],
+    [```tir CLR ^o```], [```tir CLR ^o``` / ```tir NEG ^o```], [```tir CLR ^o```],
+    [```tir CLR ^o```], [```tir GCH ^o```], [```tir GCH ^o```],
+    [```tir MAD ^d ^s x```], [```tir MAD ^d ^s y```], [```tir MAD ^d ^s x+y```],
+  ),
+  caption: [Combination rules],
+)<combine-rules>
+
+`PCH` is never merged, since each output is observable. `GCH` is never
+removed, since each input byte must be consumed.
 
 
 = Loop elimination
 
+Conditional exectution
 
 ```tir
-LSTART
-ADD ^0 -1
-ADD ^o  n
-LEND
+LENTR
+ADD    ^0 -1
+ADD    ^o  n
+LEXIT
 ```
 
 ```tir
-MAD ^o ^0 n
-CLR ^0
+CENTR  ^0
+MAD    ^o ^0 n
+CLR    ^0
+CEXIT
 ```
 for `o`$!=0$
 
+*the rest is stale*
+
 ```tir
-LSTART
+LENTR
 ADD ^0  1
 ADD ^o  n
-LEND
+LEXIT
 ```
 ```tir
 NEG ^o
@@ -295,10 +329,10 @@ CLR ^0
 ```
 
 ```tir
-LSTART
+LENTR
 ADD ^0 -1
 MAD ^d ^s n
-LEND
+LEXIT
 ```
 if $0!= d != s != 0$
 $ x'_d = x_d + n x_s + ... + n x_s = x_d + x_0 + x_0 n x_s $
@@ -311,12 +345,13 @@ CLR ^0
 ```
 
 ```tir
-LSTART
+LENTR
 ADD ^0 -1
 CLR ^o
-LEND
+LEXIT
 ```
 
+*stale until here*
 
 = Underflow and Overflow Handling
 Underflows and overflows are handled by the operating system.
@@ -334,6 +369,13 @@ The validity of a tape address is only checked on access to a value.
 The tape pointer is allowed to be invalid if it is never accessed.
 The programm `<> +` does not report an underflow even though after `<` it points outside the tape region.
 
+
+= Edge Case Behavior
+
+memory access of
+```bf
+[-<+>]
+```
 
 = Translation to Aarch64 Assembly
 
@@ -402,13 +444,13 @@ If n != 0
   sturb w1, [xtape, o]
 ```
 
-== (`LSTART`, a)
+== (`LENTR`, a)
 ```aarch64
   ldrb w0, [xtape]
   cbz w0, offset(a)
 ```
 
-== (`LEND`, a)
+== (`LEXIT`, a)
 ```aarch64
   ldrb w0, [xtape]
   cbnz w0, offset(a)
