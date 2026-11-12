@@ -36,3 +36,6 @@ Benchmark 2: ./bf-jit-new examples/mandelbrot.bf (10 runs) commit d32501d
 
 ## extensions
 https://esolangs.org/wiki/Extended_Brainfuck
+
+## source for hanoi
+https://esoteric.sange.fi/brainfuck/bf-source/prog/hanoi.bf
