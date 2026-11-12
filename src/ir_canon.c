@@ -1,3 +1,4 @@
+#include "common.h"
 #include "ir.h"
 
 typedef struct {
@@ -53,7 +54,7 @@ Footprint op_footprint(Operation op) {
     UNREACHABLE("mov instructions have no well defined footprint");
   case OP_CENTR:
   case OP_CEXIT:
-    UNREACHABLE("loop instructions have no well defined footprint");
+    UNREACHABLE("conditionals instructions have no well defined footprint");
   case OP_LENTR:
   case OP_LEXIT:
     UNREACHABLE("loop instructions have no well defined footprint");
@@ -145,11 +146,26 @@ static void sort_ops(Operation *items, size_t count) {
   }
 }
 
-static int64_t collect_moves(Operation *items, size_t count,
-                             Intermediate *new_ir) {
+typedef struct {
+  size_t old_ir_idx, new_ir_idx;
+  int64_t offset;
+} Fallback;
+
+typedef struct {
+  Fallback *items;
+  size_t count;
+  size_t capacity;
+} Fallback_Array;
+
+static void collect_moves(Intermediate const *old_ir, Intermediate *new_ir) {
+  size_t i = 0;
   int64_t current_offset = 0;
-  for (size_t i = 0; i < count; i++) {
-    Operation op = items[i];
+  Fallback fb = {0};
+  Fallback_Array fallbacks = {0};
+  Operation op = {0};
+  while (i < old_ir->count) {
+  loop_head:
+    op = old_ir->items[i];
     switch (op.kind) {
     case OP_NOP:
       break;
@@ -187,18 +203,67 @@ static int64_t collect_moves(Operation *items, size_t count,
       da_append(new_ir, op);
       break;
     case OP_CENTR:
+      fb = (Fallback){
+          .offset = current_offset,
+          .new_ir_idx = new_ir->count,
+          .old_ir_idx = i,
+      };
+      da_append(&fallbacks, fb);
       op.as.centr.offset += current_offset;
       da_append(new_ir, op);
       break;
     case OP_CEXIT:
+      fb = da_pop(&fallbacks);
+      if (current_offset != fb.offset) {
+        i = fb.old_ir_idx;
+        new_ir->count = fb.new_ir_idx;
+        op = (Operation){
+            .kind = OP_MOV,
+            .as.mov.summand = fb.offset,
+        };
+        current_offset = 0;
+        goto loop_head;
+      }
       da_append(new_ir, op);
       break;
+    // TODO: think about the implication of adding offset to LENTR
     case OP_LENTR:
+      if (fallbacks.count > 0) {
+        fb = fallbacks.items[0];
+        i = fb.old_ir_idx;
+        new_ir->count = fb.new_ir_idx;
+        op = (Operation){
+            .kind = OP_MOV,
+            .as.mov.summand = fb.offset,
+        };
+        current_offset = 0;
+        goto loop_head;
+      }
+      if (current_offset != 0) {
+        Operation mov_op = (Operation){
+            .kind = OP_MOV,
+            .as.mov.summand = current_offset,
+        };
+        da_append(new_ir, mov_op);
+        current_offset = 0;
+      }
+      da_append(new_ir, op);
+      break;
     case OP_LEXIT:
-      UNREACHABLE("never in basic block");
+      NOB_ASSERT(fallbacks.count == 0);
+      if (current_offset != 0) {
+        Operation mov_op = (Operation){
+            .kind = OP_MOV,
+            .as.mov.summand = current_offset,
+        };
+        da_append(new_ir, mov_op);
+        current_offset = 0;
+      }
+      da_append(new_ir, op);
     }
+
+    i++;
   }
-  return current_offset;
 }
 
 // Try to merge `b` (executed after `a`, same dst offset) into `a`.
@@ -275,7 +340,7 @@ static bool op_combine(Operation *a, Operation *b) {
   case OP_LEXIT:
   case OP_CENTR:
   case OP_CEXIT:
-    UNREACHABLE("invalid operation while combining operations");
+    return false;
   }
   return false;
 }
@@ -319,28 +384,6 @@ static size_t combine_ops(Operation *items, size_t count) {
   return idx_a + (items[idx_a].kind == OP_NOP ? 0 : 1);
 }
 
-void cs_canonicalize(Code_Segment segment, Intermediate *new_ir) {
-  if (!segment.is_basicblock) {
-    da_append_many(new_ir, segment.items, segment.count);
-    return;
-  }
-
-  size_t start = new_ir->count;
-
-  size_t offset = collect_moves(segment.items, segment.count, new_ir);
-
-  sort_ops(&new_ir->items[start], new_ir->count - start);
-  size_t new_count = combine_ops(&new_ir->items[start], new_ir->count - start);
-  new_ir->count = start + new_count;
-
-  // TODO: deal with conditonals which have no MOV operations
-
-  if (offset != 0) {
-    Operation move = (Operation){.kind = OP_MOV, .as.mov.summand = offset};
-    da_append(new_ir, move);
-  }
-}
-
 void ir_segment(Intermediate *ir, CS_Array *segments) {
   size_t current_start = 0;
 
@@ -382,4 +425,16 @@ void ir_segment(Intermediate *ir, CS_Array *segments) {
     };
     da_append(segments, segment);
   }
+}
+
+void canonicalize(Intermediate *old_ir, Intermediate *new_ir) {
+  new_ir->count = 0;
+  size_t start = new_ir->count;
+
+  collect_moves(old_ir, new_ir);
+
+  // TODO: do the rest in segments;
+  sort_ops(new_ir->items, new_ir->count);
+  size_t new_count = combine_ops(&new_ir->items[start], new_ir->count - start);
+  new_ir->count = start + new_count;
 }

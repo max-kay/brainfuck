@@ -94,7 +94,7 @@ char *fmt_op(Operation);
 
 void fmt_ir(String_Builder *sb, Operation *ops, size_t count);
 
-void cs_canonicalize(Code_Segment segment, Intermediate *new_ir);
+void cs_canonicalize(Intermediate *old_ir, Intermediate *new_ir);
 
 void ir_segment(Intermediate *ir, CS_Array *segments);
 

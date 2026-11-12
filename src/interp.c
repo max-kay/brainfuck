@@ -31,19 +31,16 @@ void ir_interpret(Intermediate *ir) {
       instruction_ptr++;
       break;
     case OP_MAD: {
-      uint8_t result = *(tape_ptr + op.as.mad.src_offset) * op.as.mad.factor;
-      if (result != 0) {
-        *(tape_ptr + op.as.mad.dst_offset) += result;
-      }
+      *(tape_ptr + op.as.mad.dst_offset) +=
+          *(tape_ptr + op.as.mad.src_offset) * op.as.mad.factor;
       instruction_ptr++;
       break;
     }
     case OP_MUL: {
-      uint8_t result = *(tape_ptr + op.as.mul.src1_offset) *
-                       *(tape_ptr + op.as.mul.src2_offset) * op.as.mul.factor;
-      if (result != 0) {
-        *(tape_ptr + op.as.mul.dst_offset) += result;
-      }
+      *(tape_ptr + op.as.mul.dst_offset) +=
+          *(tape_ptr + op.as.mul.src1_offset) *
+          *(tape_ptr + op.as.mul.src2_offset) * op.as.mul.factor;
+      ;
       instruction_ptr++;
       break;
     }
@@ -89,7 +86,7 @@ void ir_interpret(Intermediate *ir) {
       break;
 
     case OP_CENTR:
-      if (*tape_ptr == 0) {
+      if (*(tape_ptr + op.as.centr.offset) == 0) {
         size_t centrs = 1;
         while (centrs != 0) {
           instruction_ptr++;
@@ -109,6 +106,7 @@ void ir_interpret(Intermediate *ir) {
       break;
     }
   }
+
   if (STATS) {
     fprintf(stderr, "\n");
     fprintf(stderr, "IR interpretation\n");

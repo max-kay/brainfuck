@@ -105,9 +105,7 @@ void ir_optimize(Intermediate *ir) {
     segments.count = 0;
 
     ir_segment(ir, &segments);
-    for (size_t i = 0; i < segments.count; i++) {
-      cs_canonicalize(segments.items[i], new_ir);
-    }
+    cs_canonicalize(ir, new_ir);
 
     if (DEBUG_INFO) {
       new_segments.count = 0;
